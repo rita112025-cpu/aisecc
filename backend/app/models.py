@@ -67,6 +67,11 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     log_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Root pid of the external process tree (if any) and its create_time, to kill orphans
+    # after a crash without hitting a re-used PID.
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pid_started_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -98,7 +103,7 @@ class Scan(Base):
 class Finding(Base):
     __tablename__ = "findings"
     __table_args__ = (
-        UniqueConstraint("scan_id", "fingerprint", name="uq_findings_scan_fingerprint"),
+        UniqueConstraint("scan_id", "fingerprint", "occurrence", name="uq_findings_scan_fp_occ"),
         Index("ix_findings_project_fp", "project_id", "fingerprint"),
         Index("ix_findings_scan_severity", "scan_id", "severity"),
     )
@@ -119,7 +124,10 @@ class Finding(Base):
     column: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     message: Mapped[str] = mapped_column(Text)
+    # Line-independent identity (tool+rule+path+hash of normalised source line) for cross-scan matching.
     fingerprint: Mapped[str] = mapped_column(String(64))
+    # Ordinal among identical fingerprints within one scan, so repeated hits are all kept.
+    occurrence: Mapped[int] = mapped_column(Integer, default=0)
     # open | false_positive | accepted_risk | confirmed | fixed
     triage_status: Mapped[str] = mapped_column(String(20), default="open")
     triage_note: Mapped[str | None] = mapped_column(Text, nullable=True)

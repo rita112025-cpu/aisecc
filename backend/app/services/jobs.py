@@ -18,6 +18,7 @@ from typing import Any
 from app.db import read_session, write_session
 from app.models import Job, utcnow
 from app.services import audit
+from app.services.procs import kill_orphan_tree
 
 log = logging.getLogger(__name__)
 
@@ -55,8 +56,17 @@ class JobContext:
             job = s.get(Job, self.job_id)
             if job is not None:
                 job.progress = max(0.0, min(1.0, fraction))
+                job.heartbeat_at = utcnow()
                 if message:
                     job.message = message
+
+    def register_process(self, pid: int, create_time: float) -> None:
+        with write_session() as s:
+            job = s.get(Job, self.job_id)
+            if job is not None:
+                job.pid = pid
+                job.pid_started_at = create_time
+                job.heartbeat_at = utcnow()
 
     def log(self, text: str) -> None:
         with self.log_path.open("a", encoding="utf-8", errors="replace") as fh:
@@ -75,13 +85,23 @@ class JobManager:
         self._lock = threading.Lock()
 
     def recover_after_restart(self) -> int:
-        """Mark jobs left active by a previous process as interrupted."""
+        """Mark jobs left active by a previous process as interrupted and kill orphan process trees.
+
+        Queued jobs are also marked interrupted: their in-memory callables are gone, and
+        re-running side-effectful work (tests) silently would surprise the user.
+        """
         with write_session() as s:
             stale = s.query(Job).filter(Job.status.in_(ACTIVE_STATUSES)).all()
             for job in stale:
+                killed = bool(job.pid) and kill_orphan_tree(job.pid, job.pid_started_at)
+                previous = job.status
                 job.status = "interrupted"
-                job.error = "後端重新啟動時任務仍在執行，已標記為中斷（未自動重跑）"
+                job.error = "後端重新啟動時任務尚未完成，已標記為中斷（未自動重跑）"
                 job.finished_at = utcnow()
+                audit.record(
+                    "job.interrupted", target_type="job", target_id=job.id, project_id=job.project_id,
+                    detail={"previous_status": previous, "orphan_killed": killed}, session=s,
+                )
             return len(stale)
 
     def submit(

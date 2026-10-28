@@ -41,6 +41,8 @@ class RunOptions:
     capture_limit: int = 5_000_000
     cancel_event: threading.Event | None = None
     on_output: Callable[[str], None] | None = None
+    # Called with (pid, create_time) right after spawn so callers can persist it for orphan cleanup.
+    on_start: Callable[[int, float], None] | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -71,6 +73,18 @@ def kill_tree(pid: int) -> None:
         except psutil.NoSuchProcess:
             pass
     psutil.wait_procs(procs, timeout=5)
+
+
+def kill_orphan_tree(pid: int, create_time: float | None) -> bool:
+    """Kill a process tree left from a previous backend run, only if the PID was not re-used."""
+    try:
+        proc = psutil.Process(pid)
+        if create_time is None or abs(proc.create_time() - create_time) > 1.0:
+            return False
+    except psutil.NoSuchProcess:
+        return False
+    kill_tree(pid)
+    return True
 
 
 def _tree_rss_mb(pid: int) -> float:
@@ -119,6 +133,12 @@ def run_command(argv: Sequence[str], opts: RunOptions) -> ProcResult:
         )
     except OSError as exc:
         return ProcResult(argv, None, "error", time.monotonic() - start, error=str(exc))
+
+    if opts.on_start is not None:
+        try:
+            opts.on_start(proc.pid, psutil.Process(proc.pid).create_time())
+        except psutil.NoSuchProcess:
+            pass
 
     chunks: list[str] = []
     captured = 0

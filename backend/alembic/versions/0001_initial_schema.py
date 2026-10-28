@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-28 19:11:53.196304
+Create Date: 2026-10-28 19:15:15.031072
 """
 from __future__ import annotations
 
@@ -78,6 +78,9 @@ def upgrade() -> None:
     sa.Column('error', sa.Text(), nullable=True),
     sa.Column('cancel_requested', sa.Boolean(), nullable=False),
     sa.Column('log_path', sa.String(length=1024), nullable=True),
+    sa.Column('pid', sa.Integer(), nullable=True),
+    sa.Column('pid_started_at', sa.Float(), nullable=True),
+    sa.Column('heartbeat_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('finished_at', sa.DateTime(timezone=True), nullable=True),
@@ -175,13 +178,14 @@ def upgrade() -> None:
     sa.Column('end_line', sa.Integer(), nullable=True),
     sa.Column('message', sa.Text(), nullable=False),
     sa.Column('fingerprint', sa.String(length=64), nullable=False),
+    sa.Column('occurrence', sa.Integer(), nullable=False),
     sa.Column('triage_status', sa.String(length=20), nullable=False),
     sa.Column('triage_note', sa.Text(), nullable=True),
     sa.Column('extra', sa.JSON(), nullable=False),
     sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['scan_id'], ['scans.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('scan_id', 'fingerprint', name='uq_findings_scan_fingerprint')
+    sa.UniqueConstraint('scan_id', 'fingerprint', 'occurrence', name='uq_findings_scan_fp_occ')
     )
     with op.batch_alter_table('findings', schema=None) as batch_op:
         batch_op.create_index('ix_findings_project_fp', ['project_id', 'fingerprint'], unique=False)

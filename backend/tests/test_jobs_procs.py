@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -103,7 +104,42 @@ def test_recover_after_restart_marks_interrupted(db: Path, settings: Settings) -
     finally:
         m.shutdown()
     assert _status("stale-1").status == "interrupted"
+    assert _status("stale-2").status == "interrupted"
     assert _status("done-1").status == "succeeded"
+    from app.models import AuditLog
+
+    with read_session() as s:
+        logs = s.query(AuditLog).filter(AuditLog.action == "job.interrupted").all()
+    assert {log.target_id for log in logs} == {"stale-1", "stale-2"}
+
+
+def test_recover_kills_orphan_process_tree(db: Path, settings: Settings) -> None:
+    import subprocess
+
+    orphan = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        created = psutil.Process(orphan.pid).create_time()
+        with write_session() as s:
+            s.add(Job(id="orphan", type="test_run", status="running", pid=orphan.pid, pid_started_at=created))
+            # pid re-use guard: wrong create_time must not kill the process
+            s.add(Job(id="reused", type="test_run", status="running", pid=os.getpid(), pid_started_at=1.0))
+        m = JobManager(settings.logs_dir)
+        try:
+            m.recover_after_restart()
+        finally:
+            m.shutdown()
+        orphan.wait(timeout=10)
+        assert orphan.returncode is not None
+    finally:
+        if orphan.poll() is None:
+            orphan.kill()
+
+
+def test_run_command_reports_pid(tmp_path: Path) -> None:
+    seen: list[tuple[int, float]] = []
+    run_command([sys.executable, "-c", "pass"],
+                RunOptions(cwd=tmp_path, on_start=lambda pid, ct: seen.append((pid, ct))))
+    assert len(seen) == 1 and seen[0][0] > 0
 
 
 def test_read_log_offset(tmp_path: Path) -> None:

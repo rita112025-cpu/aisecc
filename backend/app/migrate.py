@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from alembic import command
@@ -20,6 +22,9 @@ def alembic_config(db_path: Path) -> Config:
 def upgrade_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     command.upgrade(alembic_config(db_path), "head")
+    # WAL is persistent per file; set it here once, while no other connection holds a lock.
+    with closing(sqlite3.connect(db_path, timeout=5)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
 
 
 if __name__ == "__main__":

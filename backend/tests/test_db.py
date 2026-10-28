@@ -62,9 +62,12 @@ def test_duplicate_finding_fingerprint_rejected(db: Path) -> None:
         scan_id, pid = scan.id, p.id
         s.add(Finding(scan_id=scan_id, project_id=pid, tool="t", rule_id="r", severity="low",
                       category="lint", message="m", fingerprint="abc"))
+        # same fingerprint, next occurrence (e.g. two identical hits in one file) is kept
+        s.add(Finding(scan_id=scan_id, project_id=pid, tool="t", rule_id="r", severity="low",
+                      category="lint", message="m", fingerprint="abc", occurrence=1))
     with pytest.raises(IntegrityError), write_session() as s:
         s.add(Finding(scan_id=scan_id, project_id=pid, tool="t", rule_id="r", severity="low",
-                      category="lint", message="m", fingerprint="abc"))
+                      category="lint", message="m", fingerprint="abc", occurrence=1))
 
 
 def test_project_delete_cascades_to_scans(db: Path) -> None:
@@ -82,12 +85,12 @@ def test_concurrent_writers_do_not_lock(db: Path) -> None:
 
     def worker(n: int) -> None:
         try:
-            for i in range(20):
+            for i in range(50):
                 audit.record("test.write", target_id=f"{n}-{i}")
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
-    threads = [threading.Thread(target=worker, args=(n,)) for n in range(6)]
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
     for t in threads:
         t.start()
     for t in threads:
@@ -96,7 +99,7 @@ def test_concurrent_writers_do_not_lock(db: Path) -> None:
     from app.models import AuditLog
 
     with read_session() as s:
-        assert s.query(AuditLog).filter(AuditLog.action == "test.write").count() == 120
+        assert s.query(AuditLog).filter(AuditLog.action == "test.write").count() == 400
 
 
 def test_external_process_lock_reports_busy(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
