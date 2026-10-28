@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.db import read_session, write_session
+from app.db import DatabaseBusyError, read_session, write_session
 from app.models import Job, utcnow
 from app.services import audit
 from app.services.procs import kill_orphan_tree
@@ -23,6 +24,8 @@ from app.services.procs import kill_orphan_tree
 log = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = ("queued", "running")
+FINAL_WRITE_ATTEMPTS = 3
+FINAL_WRITE_RETRY_SEC = 1.0
 FINAL_STATUSES = ("succeeded", "failed", "cancelled", "timeout", "interrupted")
 
 
@@ -90,10 +93,15 @@ class JobManager:
         Queued jobs are also marked interrupted: their in-memory callables are gone, and
         re-running side-effectful work (tests) silently would surprise the user.
         """
+        # Kill orphans outside the write transaction: kill_tree may wait seconds per job.
+        with read_session() as s:
+            stale_procs = [(j.id, j.pid, j.pid_started_at)
+                           for j in s.query(Job).filter(Job.status.in_(ACTIVE_STATUSES)).all()]
+        killed_ids = {jid for jid, pid, started in stale_procs if pid and kill_orphan_tree(pid, started)}
         with write_session() as s:
             stale = s.query(Job).filter(Job.status.in_(ACTIVE_STATUSES)).all()
             for job in stale:
-                killed = bool(job.pid) and kill_orphan_tree(job.pid, job.pid_started_at)
+                killed = job.id in killed_ids
                 previous = job.status
                 job.status = "interrupted"
                 job.error = "後端重新啟動時任務尚未完成，已標記為中斷（未自動重跑）"
@@ -148,15 +156,21 @@ class JobManager:
         return job_id
 
     def _run(self, job_id: str, fn: JobFn, event: threading.Event, log_path: Path) -> None:
+        try:
+            self._execute(job_id, fn, event, log_path)
+        except Exception:  # noqa: BLE001 - worker thread boundary; state is fixed up at next restart
+            log.exception("job %s bookkeeping failed", job_id)
+        finally:
+            with self._lock:
+                self._events.pop(job_id, None)
+                self._futures.pop(job_id, None)
+
+    def _execute(self, job_id: str, fn: JobFn, event: threading.Event, log_path: Path) -> None:
         ctx = JobContext(job_id, event, log_path)
         with write_session() as s:
             job = s.get(Job, job_id)
-            if job is None:
-                return
-            if job.cancel_requested:
-                job.status = "cancelled"
-                job.finished_at = utcnow()
-                return
+            if job is None or job.status != "queued":
+                return  # cancelled while queued (cancel() already wrote the final state)
             job.status = "running"
             job.started_at = utcnow()
         status, result, error = "succeeded", None, None
@@ -172,18 +186,27 @@ class JobManager:
             log.exception("job %s failed", job_id)
             status, error = "failed", f"{type(exc).__name__}: {exc}"
             ctx.log(f"[ERROR] {error}")
-        with write_session() as s:
-            job = s.get(Job, job_id)
-            if job is not None:
-                job.status = status
-                job.result = result
-                job.error = error
-                job.finished_at = utcnow()
-                if status == "succeeded":
-                    job.progress = 1.0
-        with self._lock:
-            self._events.pop(job_id, None)
-            self._futures.pop(job_id, None)
+        self._write_final(job_id, status, result, error)
+
+    def _write_final(self, job_id: str, status: str, result: dict[str, Any] | None, error: str | None) -> None:
+        """Persist the final state, retrying briefly so a transient lock does not leave it 'running'."""
+        for attempt in range(FINAL_WRITE_ATTEMPTS):
+            try:
+                with write_session() as s:
+                    job = s.get(Job, job_id)
+                    if job is not None:
+                        job.status = status
+                        job.result = result
+                        job.error = error
+                        job.finished_at = utcnow()
+                        if status == "succeeded":
+                            job.progress = 1.0
+                return
+            except DatabaseBusyError:
+                if attempt == FINAL_WRITE_ATTEMPTS - 1:
+                    log.error("job %s: could not persist final status %s; recovery will mark it", job_id, status)
+                    raise
+                time.sleep(FINAL_WRITE_RETRY_SEC)
 
     def cancel(self, job_id: str) -> bool:
         with write_session() as s:

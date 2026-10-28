@@ -3,31 +3,57 @@
 狀態：`DONE`（實作＋測試通過）／`PARTIAL`／`TODO`／`BLOCKED`（缺環境，附替代驗證）
 測試欄只記錄「實際執行過」的測試；未執行不得標記。
 
-最後更新：2026-10-28（Phase 1–2）
+最後更新：2026-10-28（Phase 3 / 審查輪次 1–2 修正後）
+
+## 待使用者確認的新依賴
+| 套件 | 用途 | 狀態 |
+|---|---|---|
+| fastapi, uvicorn, sqlalchemy, alembic, pydantic, pydantic-settings, pytest | 需求指定技術棧 | 已安裝於 `.venv` |
+| psutil | 程序樹終止、記憶體上限、孤兒程序清理 | 已安裝，**請確認** |
+| pathspec | `.gitignore` 語法比對（自行實作易錯） | 已安裝，**請確認** |
+| httpx | Ollama/AI Provider HTTP 呼叫、API 測試 | 已安裝，**請確認** |
+| jinja2 | HTML 報告 | 已安裝，**請確認** |
+| ruff, bandit, pip-audit, pytest-cov, pytest-timeout | 分析工具（dev） | 已安裝，**請確認** |
+| ~~chardet~~ | 依審查意見移除，改用 utf-8 → utf-8-sig → utf-16 BOM → cp950 → latin-1 | 已移除 |
 
 ## Phase 1：盤點
 | 項目 | 狀態 | 說明 |
 |---|---|---|
 | 工作目錄檢查 | DONE | `D:\github\check` 原為空目錄、非 git repo，無 AGENTS.md/README，故建立新專案 |
-| 環境工具 | DONE | Python 3.12.10、Node v24.21.0、npm 11.19.0、git 2.55、dotnet、ollama 已安裝；ruff/bandit/pip-audit 裝於 `.venv`；semgrep 未安裝（選用） |
+| 環境工具 | DONE | Python 3.12.10、Node v24.21.0、npm 11.19.0、git 2.55、dotnet、ollama 已安裝；ruff/bandit/pip-audit 裝於 `.venv`；semgrep 未安裝（選用 → tool_missing） |
 | Git | DONE | `git init -b main`（空初始 commit），各 Phase 於 `feature/*` 分支提交，不推送 |
 
 ## Phase 2：架構與資料庫
 | 項目 | 狀態 | 測試 |
 |---|---|---|
-| 資料表 projects/scans/findings/test_runs/test_results/repair_proposals/audit_logs/jobs/settings（＋finding_suppressions、test_commands） | DONE | `tests/test_db.py::test_migration_creates_required_tables` |
-| Alembic migration（0001）、可重複升級 | DONE | `test_migration_is_idempotent` |
-| WAL / busy_timeout / FK | DONE | `test_wal_mode_enabled` |
-| 重複記錄防護（project path_key、finding (scan,fingerprint)） | DONE | `test_duplicate_*` |
-| SQLite 寫入衝突（程序內寫鎖 + busy_timeout，外部鎖回報可讀錯誤） | DONE | `test_concurrent_writers_do_not_lock`、`test_external_process_lock_reports_busy` |
-| 任務系統（DB 狀態、進度、日誌、取消、去重、重啟後標記 interrupted） | DONE | `tests/test_jobs_procs.py` |
-| 安全子程序（無 shell、逾時、取消、程序樹終止、記憶體上限、低優先權） | DONE | `test_run_command_*` |
+| 資料表 projects/scans/findings/test_runs/test_results/repair_proposals/audit_logs/jobs/settings（＋finding_suppressions、test_commands） | DONE | `test_db.py::test_migration_creates_required_tables` |
+| Alembic migration、可重複升級、來回、models 無漂移 | DONE | `test_db_migrations.py` |
+| findings 唯一鍵 (scan, fingerprint, occurrence)，同檔多處命中皆保留 | DONE | `test_duplicate_finding_fingerprint_rejected` |
+| SQLite：WAL（migration 時設定）、busy_timeout、FK、寫入 BEGIN IMMEDIATE、巢狀寫入立即報錯 | DONE | `test_writer_waits_for_external_reserved_lock`、`test_nested_write_session_fails_fast` |
+| 任務系統：DB 狀態、進度、日誌、取消、去重、終態寫入重試 | DONE | `test_jobs_procs.py`、`test_final_status_write_retries` |
+| 重啟恢復：running 與 **queued 都標 interrupted**（callable 已消失、測試屬副作用不自動重跑），各寫 AuditLog；孤兒程序樹在 pid+create_time 相符時才終止 | DONE | `test_recover_*` |
+| 安全子程序：無 shell、逾時、取消、程序樹終止、記憶體上限、低優先權；.cmd/.bat 參數含 cmd 特殊字元一律拒絕 | DONE | `test_run_command_*`、`test_bat_rejects_cmd_metacharacters` |
 | 資料備份／還原、保存期限 | TODO | |
 
-## Phase 3–8
+## Phase 3：模組 A 多專案管理（後端）
+| 項目 | 狀態 | 測試 |
+|---|---|---|
+| 新增／列表／更名／移除專案（移除只刪 DB 記錄） | DONE | `test_api_projects.py` |
+| 非 git 專案可加入、掃描、分析；AI 修復需 git 且工作樹乾淨（UI 需標示） | PARTIAL | 後端完成；UI 待 Phase 6 |
+| 檔案走訪：巢狀 .gitignore、不跟隨 symlink/junction、雲端佔位檔不讀取、上限截斷、取消、> MAX_PATH | DONE | `test_fswalk_detect.py`、`test_hardening.py` |
+| 編碼：UTF-8/BOM/UTF-16/cp950/latin-1，二進位檔跳過 | DONE | `test_decode_*` |
+| 路徑邊界（.., 絕對、C:x、UNC、\\?\、ADS、裝置名、8.3、junction 逃逸） | DONE | `test_resolve_inside_*` |
+| Git 資訊：分支、commit、狀態、ahead/behind、log、diff；空 repo、detached、中文檔名、rename、git 不在 PATH | DONE | `test_gitinfo_inventory.py`、`test_hardening.py` |
+| Git 不執行 repo 設定的程式：強制 fsmonitor=false、diff.external 清空、--no-ext-diff/--no-textconv；本地 filter/textconv/include 設定 → 需專案授權 | DONE | `test_fsmonitor_hook_not_executed`、`test_filter_config_blocks_status`、`test_textconv_and_external_diff_not_executed` |
+| 依賴掃描（requirements、pyproject PEP621/poetry、package.json、csproj） | DONE | `test_parse_*` |
+| 測試框架偵測（pytest/vitest/jest/playwright/dotnet） | DONE | `test_detect_multi_language_project` |
+| 健康度報告（逐項扣分可追溯；未執行工具不算通過） | DONE | `test_health_report_*` |
+| 掃描歷史與比較（同專案、同類型） | DONE | `test_inventory_scan_job_and_compare` |
+| 本機限制：Host 白名單（防 DNS rebinding）、跨站 Origin 拒絕 | DONE | `test_rejects_*` |
+
+## Phase 4–8
 | 模組 | 狀態 |
 |---|---|
-| A 多專案管理 | TODO |
 | B 靜態分析與安全掃描 | TODO |
 | C 測試管理平台 | TODO |
 | D AI 修復助手 | TODO |
@@ -37,5 +63,8 @@
 ## 測試執行紀錄
 | 日期 | 指令 | 結果 |
 |---|---|---|
-| 2026-10-28 | `cd backend; ..\.venv\Scripts\python.exe -m pytest -q` | 23 passed |
-| 2026-10-28 | `cd backend; ..\.venv\Scripts\ruff.exe check .` | 0 errors |
+| 2026-10-28 | `cd backend; ..\.venv\Scripts\python.exe -m pytest -q` | 23 passed（Phase 2 初版） |
+| 2026-10-28 | 同上 | 30 passed（審查輪次 1 修正） |
+| 2026-10-28 | 同上 | 77 passed（Phase 3 模組 A） |
+| 2026-10-28 | 同上 `-rs` | 115 passed，0 skipped（審查輪次 1–2 修正） |
+| 2026-10-28 | `..\.venv\Scripts\ruff.exe check .` | All checks passed |

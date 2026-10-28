@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import psutil
 
+CMD_UNSAFE = re.compile(r'[&|<>^%!"()\r\n]')
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 BELOW_NORMAL_PRIORITY_CLASS = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -109,8 +111,14 @@ def run_command(argv: Sequence[str], opts: RunOptions) -> ProcResult:
     if exe is None:
         return ProcResult(argv, None, "not_found", 0.0, error=f"找不到執行檔：{argv[0]}")
     argv = [exe, *argv[1:]]
-    # .cmd/.bat shims need cmd.exe; arguments are passed as a list, never interpolated into a shell string.
+    # .cmd/.bat shims need cmd.exe, which re-parses the command line: & | < > ^ % ! " ( ) and
+    # newlines cannot be escaped reliably (quoted %VAR% still expands), so refuse such arguments.
     if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
+        # The executable path is quoted by list2cmdline (spaces), so only "(x86)"-style parens are
+        # common there; % and ! would still expand, hence the narrower check for argv[0].
+        unsafe = [a for a in argv[1:] if CMD_UNSAFE.search(a)] + [a for a in argv[:1] if re.search(r"[%!\"]", a)]
+        if unsafe:
+            return ProcResult(argv, None, "error", 0.0, error=f"參數含 cmd 特殊字元，拒絕執行：{unsafe[0]!r}")
         argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", *argv]
 
     env = dict(opts.env if opts.env is not None else os.environ)
@@ -139,6 +147,10 @@ def run_command(argv: Sequence[str], opts: RunOptions) -> ProcResult:
             opts.on_start(proc.pid, psutil.Process(proc.pid).create_time())
         except psutil.NoSuchProcess:
             pass
+        except Exception as exc:  # noqa: BLE001 - never leave an untracked child behind
+            kill_tree(proc.pid)
+            proc.wait(timeout=10)
+            return ProcResult(argv, None, "error", time.monotonic() - start, error=f"無法記錄程序資訊：{exc}")
 
     chunks: list[str] = []
     captured = 0

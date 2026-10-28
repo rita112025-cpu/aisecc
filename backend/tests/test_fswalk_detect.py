@@ -94,7 +94,7 @@ def test_resolve_inside_rejects_escape(tmp_path: Path, bad: str) -> None:
 
 
 def test_resolve_inside_accepts_nested(tmp_path: Path) -> None:
-    assert resolve_inside(tmp_path, "a/b.py") == (tmp_path / "a" / "b.py").resolve()
+    assert resolve_inside(tmp_path, "a/b.py", must_exist=False) == (tmp_path / "a" / "b.py").resolve()
 
 
 def test_parse_requirements(tmp_path: Path) -> None:

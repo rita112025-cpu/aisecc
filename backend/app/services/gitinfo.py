@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -26,12 +27,33 @@ def _env() -> dict[str, str]:
     # Prevent git from taking index.lock for opportunistic stat refreshes.
     env["GIT_OPTIONAL_LOCKS"] = "0"
     env["GIT_TERMINAL_PROMPT"] = "0"
+    for key in ("GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_DIFF_OPTS"):
+        env.pop(key, None)
     env["LC_ALL"] = "C.UTF-8"
     return env
 
 
+# Repo-controlled config can make "read-only" commands execute programs (core.fsmonitor,
+# diff.external, filters, textconv). Command-line -c has the highest precedence.
+SAFE_CONFIG = (
+    "-c", "core.quotepath=off", "-c", "color.ui=never", "-c", "core.fsmonitor=false",
+    "-c", "core.untrackedCache=false", "-c", "diff.external=", "-c", "core.pager=cat",
+)
+UNSAFE_LOCAL_KEYS = re.compile(
+    r"^(filter\..+\.(clean|smudge|process)|diff\..+\.(textconv|command)|include\.path|includeif\..+\.path)$",
+    re.IGNORECASE,
+)
+
+
+REV_PATTERN = re.compile(r"[\w./~^@{}\-]{1,200}")
+
+
+class GitUntrustedConfig(GitError):
+    """The repository's own config defines commands git could run; needs explicit authorisation."""
+
+
 def run_git(repo: Path, *args: str, timeout: int = GIT_TIMEOUT, check: bool = True) -> str:
-    cmd = ["git", "-c", "core.quotepath=off", "-c", "color.ui=never", *args]
+    cmd = ["git", "--no-pager", *SAFE_CONFIG, *args]
     try:
         proc = subprocess.run(  # noqa: S603 - fixed git argv
             cmd, cwd=str(repo), capture_output=True, timeout=timeout, env=_env(),
@@ -88,6 +110,9 @@ class GitInfo:
     entries_truncated: bool = False
     counts: dict[str, int] = field(default_factory=dict)
     error: str | None = None
+    git_missing: bool = False
+    # Set when status/diff were skipped because repo config could execute programs.
+    blocked_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,10 +156,35 @@ def _entry(xy: str, path: str) -> StatusEntry:
     return StatusEntry(path, _XY.get(code, "modified"), x != ".", y != ".")
 
 
-def get_info(repo: Path) -> GitInfo:
+def unsafe_local_config(repo: Path) -> list[str]:
+    """Repo-local config keys that could make git execute programs. Reading config runs nothing."""
+    out = run_git(repo, "config", "--local", "--list", "--name-only", check=False, timeout=15)
+    return sorted({k for k in out.splitlines() if UNSAFE_LOCAL_KEYS.match(k.strip())})
+
+
+def ensure_safe_config(repo: Path, allow_repo_config: bool) -> None:
+    if allow_repo_config:
+        return
+    keys = unsafe_local_config(repo)
+    if keys:
+        raise GitUntrustedConfig(
+            f"此儲存庫的 .git/config 定義了可執行程式的設定（{', '.join(keys)}），需在專案設定開啟「允許執行專案工具」"
+        )
+
+
+def get_info(repo: Path, allow_repo_config: bool = False) -> GitInfo:
+    if not git_available():
+        return GitInfo(is_repo=False, git_missing=True, error="系統未安裝 git")
     if not is_git_repo(repo):
         return GitInfo(is_repo=False)
     info = GitInfo(is_repo=True)
+    try:
+        ensure_safe_config(repo, allow_repo_config)
+    except GitUntrustedConfig as exc:
+        info.blocked_reason = str(exc)
+        info.branch = current_branch(repo)
+        info.head = head_commit(repo)
+        return info
     try:
         raw = run_git(repo, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal")
     except GitError as exc:
@@ -192,11 +242,12 @@ def log(repo: Path, limit: int = 50) -> list[dict[str, str]]:
 
 
 def diff(repo: Path, *, base: str | None = None, target: str | None = None, path: str | None = None,
-         max_bytes: int = 2_000_000) -> dict[str, Any]:
+         max_bytes: int = 2_000_000, allow_repo_config: bool = False) -> dict[str, Any]:
     """Unified diff: working tree vs HEAD (default), or between two revisions."""
     for rev in (base, target):
-        if rev is not None and (rev.startswith("-") or not rev.strip()):
+        if rev is not None and (rev.startswith("-") or not REV_PATTERN.fullmatch(rev)):
             raise GitError("不合法的版本參數")
+    ensure_safe_config(repo, allow_repo_config)
     args = ["diff", "--no-ext-diff", "--no-textconv", "--find-renames"]
     if base and target:
         args += [base, target]
@@ -220,7 +271,8 @@ def diff(repo: Path, *, base: str | None = None, target: str | None = None, path
             "files": files, "truncated": truncated}
 
 
-def dirty_paths(repo: Path) -> set[str]:
+def dirty_paths(repo: Path, allow_repo_config: bool = False) -> set[str]:
+    ensure_safe_config(repo, allow_repo_config)
     raw = run_git(repo, "status", "--porcelain=v2", "-z", "--untracked-files=all")
     _, entries = parse_status_v2(raw)
     return {e.path for e in entries}

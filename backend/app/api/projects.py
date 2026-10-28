@@ -11,6 +11,7 @@ from app.api.common import JobRef, ORMModel, get_project_or_404, job_manager, pr
 from app.db import get_db, write_session
 from app.models import Project, Scan
 from app.services import audit, gitinfo
+from app.services.fswalk import resolve_inside
 from app.services.inventory import run_inventory_scan
 from app.services.jobs import JobManager
 from app.services.projects import ProjectError, add_project, list_dir
@@ -113,8 +114,8 @@ def project_tree(project_id: int, path: str = "", db: Session = Depends(get_db))
 
 @router.get("/{project_id}/git")
 def project_git(project_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
-    root = project_root(get_project_or_404(db, project_id))
-    return gitinfo.get_info(root).to_dict()
+    project = get_project_or_404(db, project_id)
+    return gitinfo.get_info(project_root(project), project.allow_project_tools).to_dict()
 
 
 @router.get("/{project_id}/git/log")
@@ -134,11 +135,19 @@ def project_git_diff(
     path: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    root = project_root(get_project_or_404(db, project_id))
+    project = get_project_or_404(db, project_id)
+    root = project_root(project)
     if not gitinfo.is_git_repo(root):
         raise HTTPException(400, "不是 Git 儲存庫")
+    if path:
+        try:
+            resolve_inside(root, path, must_exist=False)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc)) from exc
     try:
-        return gitinfo.diff(root, base=base, target=target, path=path)
+        return gitinfo.diff(root, base=base, target=target, path=path, allow_repo_config=project.allow_project_tools)
+    except gitinfo.GitUntrustedConfig as exc:
+        raise HTTPException(409, str(exc)) from exc
     except gitinfo.GitError as exc:
         raise HTTPException(400, str(exc)) from exc
 

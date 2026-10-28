@@ -17,7 +17,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-WRITE_LOCK = threading.RLock()
+WRITE_LOCK = threading.Lock()
+_local = threading.local()
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -114,7 +115,11 @@ def write_session() -> Iterator[Session]:
     avoids needless contention between our own threads."""
     if _db.write_factory is None:
         raise RuntimeError("Database engine is not initialised")
+    if getattr(_local, "in_write", False):
+        # A second BEGIN IMMEDIATE on this thread would wait on our own lock until busy_timeout.
+        raise RuntimeError("巢狀 write_session：請傳入外層 session")
     with WRITE_LOCK:
+        _local.in_write = True
         session = _db.write_factory()
         try:
             session.connection()  # starts BEGIN IMMEDIATE now
@@ -130,6 +135,7 @@ def write_session() -> Iterator[Session]:
             raise
         finally:
             session.close()
+            _local.in_write = False
 
 
 def get_db() -> Iterator[Session]:

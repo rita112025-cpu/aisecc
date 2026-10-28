@@ -51,7 +51,7 @@ def add_project(raw_path: str, name: str | None = None) -> Project:
 
 
 def list_dir(root: Path, rel: str = "", limit: int = 2000) -> dict[str, Any]:
-    target = root.resolve() if rel in ("", ".") else resolve_inside(root, rel)
+    target = Path(os.path.realpath(root)) if rel in ("", ".") else resolve_inside(root, rel)
     if not target.is_dir():
         raise ProjectError("不是資料夾")
     items = []

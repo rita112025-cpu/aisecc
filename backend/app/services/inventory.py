@@ -16,7 +16,7 @@ from app.services.jobs import JobContext
 from app.services.settings_store import load_settings
 
 
-def build_inventory(root: Path, ctx: JobContext | None = None) -> dict[str, Any]:
+def build_inventory(root: Path, ctx: JobContext | None = None, allow_repo_config: bool = False) -> dict[str, Any]:
     settings = load_settings()
     check = ctx.check_cancelled if ctx else None
     if ctx:
@@ -28,7 +28,7 @@ def build_inventory(root: Path, ctx: JobContext | None = None) -> dict[str, Any]
     det = detect(root, walked)
     if ctx:
         ctx.progress(0.75, "讀取 Git 狀態")
-    git = gitinfo.get_info(root)
+    git = gitinfo.get_info(root, allow_repo_config)
     ext_counts = Counter(Path(f.rel).suffix.lower() or "(none)" for f in walked.files)
     top_dirs = Counter(f.rel.split("/", 1)[0] if "/" in f.rel else "." for f in walked.files)
     return {
@@ -37,6 +37,7 @@ def build_inventory(root: Path, ctx: JobContext | None = None) -> dict[str, Any]
         "truncated": walked.truncated,
         "symlinks": walked.symlinks[:500],
         "symlink_count": len(walked.symlinks),
+        "cloud_placeholders": walked.cloud_placeholders[:500],
         "ignored_dirs": walked.ignored_dirs,
         "walk_errors": walked.errors[:200],
         "extensions": dict(ext_counts.most_common(30)),
@@ -52,6 +53,7 @@ def run_inventory_scan(project_id: int, ctx: JobContext) -> dict[str, Any]:
         if project is None:
             raise ValueError("專案不存在")
         root = Path(project.path)
+        allow = project.allow_project_tools
     if not root.is_dir():
         raise FileNotFoundError(f"專案路徑不存在：{root}")
     with write_session() as s:
@@ -60,7 +62,7 @@ def run_inventory_scan(project_id: int, ctx: JobContext) -> dict[str, Any]:
         s.flush()
         scan_id = scan.id
     try:
-        summary = build_inventory(root, ctx)
+        summary = build_inventory(root, ctx, allow)
     except BaseException as exc:
         with write_session() as s:
             scan = s.get(Scan, scan_id)

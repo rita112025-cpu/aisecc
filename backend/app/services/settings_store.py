@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -32,12 +34,29 @@ class AppSettings(BaseModel):
     @field_validator("ollama_url")
     @classmethod
     def _ollama_local(cls, v: str) -> str:
-        from urllib.parse import urlparse
-
-        host = urlparse(v).hostname or ""
-        if host not in {"127.0.0.1", "localhost", "::1"}:
+        if not _is_local_url(v):
             raise ValueError("Ollama 位址必須是本機 (127.0.0.1 / localhost)")
         return v
+
+    @field_validator("external_ai_api_key_env")
+    @classmethod
+    def _key_env_namespaced(cls, v: str) -> str:
+        # Only our own namespace, so a settings write cannot exfiltrate e.g. GITHUB_TOKEN.
+        if not re.fullmatch(r"AISECC_[A-Z0-9_]+", v):
+            raise ValueError("API 金鑰環境變數名稱必須以 AISECC_ 開頭（僅大寫英數與底線）")
+        return v
+
+    @field_validator("external_ai_base_url")
+    @classmethod
+    def _external_url(cls, v: str) -> str:
+        if v and not (urlparse(v).scheme == "https" and urlparse(v).hostname) and not _is_local_url(v):
+            raise ValueError("外部 AI 位址必須是 https:// 或本機位址")
+        return v
+
+
+def _is_local_url(v: str) -> bool:
+    parsed = urlparse(v)
+    return parsed.scheme in ("http", "https") and (parsed.hostname or "") in {"127.0.0.1", "localhost", "::1"}
 
 
 def load_settings() -> AppSettings:
