@@ -11,6 +11,8 @@ from app.api.common import JobRef, ORMModel, get_project_or_404, job_manager, pr
 from app.db import get_db, write_session
 from app.models import Project, Scan
 from app.services import audit, gitinfo
+from app.services.analysis.engine import run_analysis_scan
+from app.services.analysis.tools import TOOLS
 from app.services.fswalk import resolve_inside
 from app.services.inventory import run_inventory_scan
 from app.services.jobs import JobManager
@@ -27,6 +29,11 @@ class ProjectCreate(BaseModel):
 class ProjectPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     allow_project_tools: bool | None = None
+    allow_network_audit: bool | None = None
+
+
+class AnalyzeIn(BaseModel):
+    tools: list[str] | None = None
 
 
 class ProjectOut(ORMModel):
@@ -36,6 +43,7 @@ class ProjectOut(ORMModel):
     languages: list[Any]
     is_git: bool
     allow_project_tools: bool
+    allow_network_audit: bool
     created_at: datetime
     last_scan_at: datetime | None
     health_score: float | None = None
@@ -159,5 +167,20 @@ def start_inventory_scan(project_id: int, db: Session = Depends(get_db),
     job_id = jobs.submit(
         "inventory_scan", lambda ctx: run_inventory_scan(project_id, ctx),
         project_id=project_id, dedupe_key=f"inventory:{project_id}",
+    )
+    return JobRef(job_id=job_id)
+
+
+@router.post("/{project_id}/analyze", response_model=JobRef, status_code=202)
+def start_analysis(project_id: int, body: AnalyzeIn | None = None, db: Session = Depends(get_db),
+                   jobs: JobManager = Depends(job_manager)) -> JobRef:
+    project_root(get_project_or_404(db, project_id))
+    tools = body.tools if body else None
+    unknown = set(tools or []) - {t.name for t in TOOLS}
+    if unknown:
+        raise HTTPException(400, f"未知的工具：{sorted(unknown)}")
+    job_id = jobs.submit(
+        "analysis_scan", lambda ctx: run_analysis_scan(project_id, ctx, tools),
+        project_id=project_id, params={"tools": tools}, dedupe_key=f"analysis:{project_id}",
     )
     return JobRef(job_id=job_id)

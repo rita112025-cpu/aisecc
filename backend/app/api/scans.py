@@ -4,11 +4,15 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.common import ORMModel
+from app.config import get_settings
 from app.db import get_db
 from app.models import Scan
+from app.services.analysis.diff import compare_analysis_scans
+from app.services.analysis.report import write_reports
 from app.services.inventory import compare_inventories
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -63,9 +67,23 @@ def compare_scans(a: int, b: int, db: Session = Depends(get_db)) -> dict[str, An
         raise HTTPException(400, "掃描類型不同，無法比較")
     if sa.kind == "inventory":
         return {"kind": "inventory", "a": a, "b": b, "diff": compare_inventories(sa.summary, sb.summary)}
-    from app.services.analysis.diff import compare_analysis_scans
-
     return {"kind": "analysis", "a": a, "b": b, "diff": compare_analysis_scans(db, a, b)}
+
+
+@router.get("/{scan_id}/report.{fmt}")
+def scan_report(scan_id: int, fmt: str, db: Session = Depends(get_db)) -> FileResponse:
+    scan = _get(db, scan_id)
+    if fmt not in ("json", "html"):
+        raise HTTPException(404, "不支援的格式")
+    if scan.kind != "analysis":
+        raise HTTPException(400, "僅分析掃描有報告")
+    path = get_settings().reports_dir / f"scan-{scan_id}.{fmt}"
+    if not path.is_file():
+        if scan.status not in ("completed", "partial"):
+            raise HTTPException(409, "掃描尚未完成")
+        write_reports(scan_id)
+    media = "application/json" if fmt == "json" else "text/html"
+    return FileResponse(path, media_type=f"{media}; charset=utf-8", filename=f"scan-{scan_id}.{fmt}")
 
 
 @router.get("/{scan_id}", response_model=ScanDetail)

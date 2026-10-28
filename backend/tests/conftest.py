@@ -6,16 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
+from app.config import Settings, set_active_settings
 from app.db import dispose_engine, init_engine
 from app.migrate import upgrade_db
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path) -> Iterator[Settings]:
     s = Settings(data_dir=tmp_path / "資料 data")
     s.ensure_dirs()
-    return s
+    set_active_settings(s)
+    yield s
+    set_active_settings(None)
 
 
 @pytest.fixture

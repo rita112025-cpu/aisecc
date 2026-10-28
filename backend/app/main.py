@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, set_active_settings
 from app.db import DatabaseBusyError, dispose_engine, init_engine
 from app.migrate import upgrade_db
 from app.services.jobs import DuplicateJobError, JobManager
@@ -35,6 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.ensure_dirs()
+        set_active_settings(settings)
         upgrade_db(settings.db_path)
         init_engine(settings.db_path)
         manager = JobManager(settings.logs_dir, settings.max_workers)
@@ -67,9 +68,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def dup_handler(_: Request, exc: DuplicateJobError) -> JSONResponse:
         return JSONResponse({"detail": str(exc), "job_id": exc.existing_id}, status_code=409)
 
-    from app.api import jobs, projects, scans
+    from app.api import findings, jobs, projects, scans
 
-    for router in (projects.router, scans.router, jobs.router):
+    for router in (projects.router, scans.router, findings.router, jobs.router):
         app.include_router(router, prefix="/api")
 
     @app.get("/api/health")

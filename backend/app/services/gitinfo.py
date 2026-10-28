@@ -6,6 +6,10 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,11 +56,38 @@ class GitUntrustedConfig(GitError):
     """The repository's own config defines commands git could run; needs explicit authorisation."""
 
 
+_private_index = threading.local()
+
+
+@contextmanager
+def private_index(repo: Path) -> Iterator[None]:
+    """Run git against a temporary copy of the index so the user's index is never rewritten
+    (status/diff may refresh racily-clean entries even with GIT_OPTIONAL_LOCKS=0)."""
+    try:
+        index = Path(run_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index", timeout=15).strip())
+    except GitError:
+        index = None
+    if index is None or not index.is_file():
+        yield
+        return
+    with tempfile.TemporaryDirectory(prefix="aisecc-idx-") as tmp:
+        copy = Path(tmp) / "index"
+        shutil.copy2(index, copy)
+        _private_index.path = str(copy)
+        try:
+            yield
+        finally:
+            _private_index.path = None
+
+
 def run_git(repo: Path, *args: str, timeout: int = GIT_TIMEOUT, check: bool = True) -> str:
     cmd = ["git", "--no-pager", *SAFE_CONFIG, *args]
+    env = _env()
+    if getattr(_private_index, "path", None):
+        env["GIT_INDEX_FILE"] = _private_index.path
     try:
         proc = subprocess.run(  # noqa: S603 - fixed git argv
-            cmd, cwd=str(repo), capture_output=True, timeout=timeout, env=_env(),
+            cmd, cwd=str(repo), capture_output=True, timeout=timeout, env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except FileNotFoundError as exc:
@@ -186,7 +217,8 @@ def get_info(repo: Path, allow_repo_config: bool = False) -> GitInfo:
         info.head = head_commit(repo)
         return info
     try:
-        raw = run_git(repo, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal")
+        with private_index(repo):
+            raw = run_git(repo, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal")
     except GitError as exc:
         info.error = str(exc)
         return info
@@ -257,8 +289,9 @@ def diff(repo: Path, *, base: str | None = None, target: str | None = None, path
         args.append("HEAD")
     if path:
         args += ["--", path]
-    text = run_git(repo, *args)
-    stat_out = run_git(repo, *(["diff", "--numstat", *args[1:]]))
+    with private_index(repo):
+        text = run_git(repo, *args)
+        stat_out = run_git(repo, *(["diff", "--numstat", *args[1:]]))
     files = []
     for line in stat_out.splitlines():
         parts = line.split("\t")
@@ -273,6 +306,7 @@ def diff(repo: Path, *, base: str | None = None, target: str | None = None, path
 
 def dirty_paths(repo: Path, allow_repo_config: bool = False) -> set[str]:
     ensure_safe_config(repo, allow_repo_config)
-    raw = run_git(repo, "status", "--porcelain=v2", "-z", "--untracked-files=all")
+    with private_index(repo):
+        raw = run_git(repo, "status", "--porcelain=v2", "-z", "--untracked-files=all")
     _, entries = parse_status_v2(raw)
     return {e.path for e in entries}

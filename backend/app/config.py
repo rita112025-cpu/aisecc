@@ -45,6 +45,19 @@ class Settings(BaseSettings):
             d.mkdir(parents=True, exist_ok=True)
 
 
+_active: Settings | None = None
+
+
 @lru_cache
-def get_settings() -> Settings:
+def _env_settings() -> Settings:
     return Settings()
+
+
+def set_active_settings(settings: Settings | None) -> None:
+    """The app factory registers its settings so services use the same data directory."""
+    global _active
+    _active = settings
+
+
+def get_settings() -> Settings:
+    return _active if _active is not None else _env_settings()

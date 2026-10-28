@@ -37,7 +37,7 @@ def test_migration_is_idempotent(db: Path) -> None:
 
     upgrade_db(db)  # second run must be a no-op, not fail
     with sqlite3.connect(db) as conn:
-        assert conn.execute("select version_num from alembic_version").fetchone()[0] == "0001"
+        assert conn.execute("select version_num from alembic_version").fetchone()[0] == "0002"
 
 
 def test_wal_mode_enabled(db: Path) -> None:

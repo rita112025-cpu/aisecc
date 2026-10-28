@@ -51,10 +51,28 @@
 | 掃描歷史與比較（同專案、同類型） | DONE | `test_inventory_scan_job_and_compare` |
 | 本機限制：Host 白名單（防 DNS rebinding）、跨站 Origin 拒絕 | DONE | `test_rejects_*` |
 
-## Phase 4–8
+## Phase 4：模組 B 靜態分析與安全掃描（後端）
+| 項目 | 狀態 | 測試 |
+|---|---|---|
+| 工具分級：auto（ruff、bandit、內建）／project_code（eslint、tsc，需 allow_project_tools）／network（npm audit、pip-audit、semgrep，需 allow_network_audit） | DONE | `test_project_tier_tools_need_authorization_and_never_spawn`、`test_authorised_matrix` |
+| 未安裝／逾時／輸出異常 → not_installed／timeout／error，不算通過；有工具未執行時 scan=partial | DONE | `test_tool_missing_is_not_pass`、`test_tool_timeout_reported`、`test_malformed_tool_output_is_error`、`test_api_full_scan_is_partial_when_tools_skipped` |
+| Ruff、Bandit 實際執行並轉換為檔案＋行號 | DONE | `test_real_ruff_and_bandit_findings` |
+| ESLint／tsc（node.exe 直接執行 package bin，不經 .cmd） | PARTIAL | 已實作；本環境無含 node_modules 的範例專案，未做實際執行測試 |
+| npm audit（--package-lock-only --ignore-scripts）／pip-audit（--no-deps --disable-pip） | PARTIAL | 已實作授權閘門測試；實際連網稽核未在自動測試中執行 |
+| Semgrep（選用） | BLOCKED | 本機未安裝 → not_installed；替代驗證：授權/未安裝狀態測試 |
+| 硬編碼密碼與敏感資訊（遮罩、測試路徑降級、佔位字過濾、熵值） | DONE | `test_secrets_*` |
+| 複雜度、過大函式（Python AST；JS/TS 啟發式） | DONE | `test_python_complexity_and_length`、`test_js_complexity_heuristic` |
+| 重複程式碼 | DONE | `test_duplication_*` |
+| 循環依賴（Python、JS/TS） | DONE | `test_python_and_js_import_cycles`、`test_tarjan_components` |
+| 未使用程式碼候選 | DONE | `test_unused_candidates` |
+| fingerprint（不含行號）＋ occurrence；冪等寫入；移動程式碼判為未變 | DONE | `test_fingerprint_*`、`test_persist_is_idempotent_and_keeps_duplicates`、`test_api_analyze_triage_diff_and_reports` |
+| 誤報處理：triage（誤報/接受風險需理由）並依 fingerprint 帶入後續掃描 | DONE | 同上 |
+| 搜尋、過濾、排序 findings | DONE | 同上 |
+| JSON 與 HTML 報告（jinja2 autoescape） | DONE | 同上 |
+
+## Phase 5–8
 | 模組 | 狀態 |
 |---|---|
-| B 靜態分析與安全掃描 | TODO |
 | C 測試管理平台 | TODO |
 | D AI 修復助手 | TODO |
 | E Web 介面 | TODO |

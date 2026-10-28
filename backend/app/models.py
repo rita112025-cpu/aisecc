@@ -40,6 +40,8 @@ class Project(Base):
     is_git: Mapped[bool] = mapped_column(Boolean, default=False)
     # Allows running project-provided tools (eslint/tsc from node_modules), which execute project code.
     allow_project_tools: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Allows sending dependency lists to package registries / fetching rules (npm audit, pip-audit, semgrep).
+    allow_network_audit: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
