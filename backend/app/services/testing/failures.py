@@ -23,7 +23,9 @@ CATEGORIES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("assertion", re.compile(r"(?i)AssertionError|assert |expect\(|Expected|Assert\.\w+ Failure"),
      "斷言失敗：實際結果與預期不同"),
 )
-_FRAME = re.compile(r'(?:File "(?P<py>[^"]+)", line (?P<pyl>\d+))|(?P<js>[\w./\\-]+\.(?:[cm]?[jt]sx?|py|cs)):(?P<jsl>\d+)')
+_FRAME = re.compile(
+    r'(?:File "(?P<py>[^"]+)", line (?P<pyl>\d+))|(?P<js>[\w./\\-]+\.(?:[cm]?[jt]sx?|py|cs)):(?P<jsl>\d+)'
+)
 
 
 def classify(message: str | None) -> tuple[str, str]:
