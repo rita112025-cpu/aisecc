@@ -34,7 +34,7 @@ class AppSettings(BaseModel):
     @field_validator("ollama_url")
     @classmethod
     def _ollama_local(cls, v: str) -> str:
-        if not _is_local_url(v):
+        if not is_local_url(v):
             raise ValueError("Ollama 位址必須是本機 (127.0.0.1 / localhost)")
         return v
 
@@ -49,12 +49,12 @@ class AppSettings(BaseModel):
     @field_validator("external_ai_base_url")
     @classmethod
     def _external_url(cls, v: str) -> str:
-        if v and not (urlparse(v).scheme == "https" and urlparse(v).hostname) and not _is_local_url(v):
+        if v and not (urlparse(v).scheme == "https" and urlparse(v).hostname) and not is_local_url(v):
             raise ValueError("外部 AI 位址必須是 https:// 或本機位址")
         return v
 
 
-def _is_local_url(v: str) -> bool:
+def is_local_url(v: str) -> bool:
     parsed = urlparse(v)
     return parsed.scheme in ("http", "https") and (parsed.hostname or "") in {"127.0.0.1", "localhost", "::1"}
 

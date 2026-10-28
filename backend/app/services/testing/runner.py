@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.db import read_session, write_session
 from app.models import Project, TestCommand, TestResult, TestRun, utcnow
 from app.services import audit, gitinfo
+from app.services.ai import workspace as repair_workspace
 from app.services.fswalk import resolve_inside
 from app.services.jobs import JobCancelled, JobContext, JobTimeout
 from app.services.procs import RunOptions, run_command
@@ -52,13 +53,18 @@ def _has_pytest_cov(root: Path) -> bool:
 
 
 def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = False,
-              rerun_of: int | None = None) -> dict[str, Any]:
+              rerun_of: int | None = None, workspace: Path | None = None) -> dict[str, Any]:
+    """Run an approved command. With `workspace`, the same command runs inside an isolated repair
+    workspace (dependency folders junctioned in) instead of the real project."""
     cmd = approved_command(project_id, key)
     with read_session() as s:
         project = s.get(Project, project_id)
         root = Path(project.path)
         allow_cfg = project.allow_project_tools
-    workdir = resolve_inside(root, cmd.cwd) if cmd.cwd not in ("", ".") else Path(os.path.realpath(root))
+    base_dir = root if workspace is None else workspace
+    if workspace is not None:
+        ctx.log(f"連結依賴資料夾：{repair_workspace.link_dependencies(root, workspace, cmd.cwd)}")
+    workdir = resolve_inside(base_dir, cmd.cwd) if cmd.cwd not in ("", ".") else Path(os.path.realpath(base_dir))
     selection: list[str] = []
     if rerun_of is not None:
         with read_session() as s:
@@ -68,8 +74,8 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
         selection = rerun_args(cmd.framework, failed)
 
     branch = commit = None
-    if gitinfo.is_git_repo(root):
-        branch, commit = gitinfo.current_branch(root), gitinfo.head_commit(root)
+    if gitinfo.is_git_repo(base_dir):
+        branch, commit = gitinfo.current_branch(base_dir), gitinfo.head_commit(base_dir)
     with write_session() as s:
         run = TestRun(project_id=project_id, job_id=ctx.job_id, command_key=key, framework=cmd.framework,
                       argv=list(cmd.argv), workdir=str(workdir), branch=branch, commit_sha=commit,
@@ -79,7 +85,8 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
         run_id = run.id
         audit.record("test.run", target_type="test_run", target_id=run_id, project_id=project_id,
                      detail={"key": key, "argv": cmd.argv, "rerun_of": rerun_of, "coverage": coverage,
-                             "approved_hash": cmd.approved_hash, "git_config_trusted": allow_cfg}, session=s)
+                             "approved_hash": cmd.approved_hash, "git_config_trusted": allow_cfg,
+                             "workspace": str(workspace) if workspace else None}, session=s)
 
     out_dir = get_settings().reports_dir / "tests" / str(run_id)
     out_dir.mkdir(parents=True, exist_ok=True)
