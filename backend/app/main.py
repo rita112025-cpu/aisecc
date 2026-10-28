@@ -16,6 +16,7 @@ from app.config import Settings, get_settings, set_active_settings
 from app.db import DatabaseBusyError, dispose_engine, init_engine
 from app.migrate import upgrade_db
 from app.services.jobs import DuplicateJobError, JobManager
+from app.services.maintenance import apply_retention
 
 log = logging.getLogger(__name__)
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
@@ -44,6 +45,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log.warning("marked %d stale jobs as interrupted", interrupted)
         app.state.jobs = manager
         app.state.settings = settings
+        try:
+            apply_retention(settings)
+        except Exception:  # noqa: BLE001 - retention must never block startup
+            log.exception("retention cleanup failed at startup")
         yield
         manager.shutdown()
         dispose_engine()
@@ -68,9 +73,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def dup_handler(_: Request, exc: DuplicateJobError) -> JSONResponse:
         return JSONResponse({"detail": str(exc), "job_id": exc.existing_id}, status_code=409)
 
-    from app.api import ai, findings, jobs, projects, scans, tests_api
+    from app.api import ai, findings, jobs, projects, scans, system, tests_api
 
-    for router in (projects.router, scans.router, findings.router, jobs.router, tests_api.router, ai.router):
+    for router in (projects.router, scans.router, findings.router, jobs.router, tests_api.router, ai.router,
+                   system.router):
         app.include_router(router, prefix="/api")
 
     @app.get("/api/health")
