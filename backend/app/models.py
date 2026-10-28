@@ -153,6 +153,7 @@ class FindingSuppression(Base):
 
 
 class TestCommand(Base):
+    __test__ = False  # not a pytest test class
     """A test command the user reviewed. Only approved commands can be executed."""
 
     __tablename__ = "test_commands"
@@ -175,6 +176,7 @@ class TestCommand(Base):
 
 
 class TestRun(Base):
+    __test__ = False  # not a pytest test class
     __tablename__ = "test_runs"
     __table_args__ = (Index("ix_test_runs_project_created", "project_id", "created_at"),)
 
@@ -206,6 +208,7 @@ class TestRun(Base):
 
 
 class TestResult(Base):
+    __test__ = False  # not a pytest test class
     __tablename__ = "test_results"
     __table_args__ = (
         UniqueConstraint("run_id", "name", name="uq_test_result_name"),

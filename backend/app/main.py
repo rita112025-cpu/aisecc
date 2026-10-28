@@ -68,9 +68,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def dup_handler(_: Request, exc: DuplicateJobError) -> JSONResponse:
         return JSONResponse({"detail": str(exc), "job_id": exc.existing_id}, status_code=409)
 
-    from app.api import findings, jobs, projects, scans
+    from app.api import findings, jobs, projects, scans, tests_api
 
-    for router in (projects.router, scans.router, findings.router, jobs.router):
+    for router in (projects.router, scans.router, findings.router, jobs.router, tests_api.router):
         app.include_router(router, prefix="/api")
 
     @app.get("/api/health")

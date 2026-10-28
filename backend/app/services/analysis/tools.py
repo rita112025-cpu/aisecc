@@ -184,7 +184,7 @@ def _package_dirs(ctx: ToolContext) -> list[Path]:
     return sorted({d for d in dirs if "node_modules" not in d.parts})
 
 
-def _node_bin(pkg_dir: Path, package: str, bin_name: str) -> Path | None:
+def node_bin(pkg_dir: Path, package: str, bin_name: str) -> Path | None:
     """Resolve a package's bin script so it runs via node.exe directly (never through a .cmd shim)."""
     pkg_json = pkg_dir / "node_modules" / package / "package.json"
     if not pkg_json.is_file():
@@ -208,7 +208,7 @@ def run_eslint(ctx: ToolContext) -> ToolResult:
     findings: list[RawFinding] = []
     ran, total, messages, cmd = 0, 0.0, [], None
     for d in _package_dirs(ctx):
-        script = _node_bin(d, "eslint", "eslint")
+        script = node_bin(d, "eslint", "eslint")
         if script is None:
             continue
         cmd = [node, str(script), "-f", "json", "--no-error-on-unmatched-pattern", "."]
@@ -247,7 +247,7 @@ def run_tsc(ctx: ToolContext) -> ToolResult:
     findings: list[RawFinding] = []
     ran, total, cmd = 0, 0.0, None
     for d in _package_dirs(ctx):
-        script = _node_bin(d, "typescript", "tsc")
+        script = node_bin(d, "typescript", "tsc")
         if script is None or not (d / "tsconfig.json").is_file():
             continue
         cmd = [node, str(script), "--noEmit", "--pretty", "false", "-p", "tsconfig.json"]
