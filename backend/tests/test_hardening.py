@@ -46,6 +46,35 @@ def test_bat_plain_args_still_work(tmp_path: Path) -> None:
     assert r.outcome == "finished" and "ARGS=hello world" in r.output
 
 
+@win_only
+def test_bat_path_with_ampersand_rejected(tmp_path: Path) -> None:
+    d = tmp_path / "R&D"
+    d.mkdir()
+    bat = d / "x.bat"
+    bat.write_text("@echo ran\r\n", encoding="ascii")
+    r = run_command([str(bat), "ok"], RunOptions(cwd=tmp_path))
+    assert r.outcome == "error" and "ran" not in r.output
+
+
+@win_only
+def test_bat_path_with_parens_and_space_allowed(tmp_path: Path) -> None:
+    d = tmp_path / "Program Files (x86)"
+    d.mkdir()
+    bat = d / "x.bat"
+    bat.write_text("@echo ran %1\r\n", encoding="ascii")
+    r = run_command([str(bat), "ok"], RunOptions(cwd=tmp_path))
+    assert r.outcome == "finished" and "ran ok" in r.output
+
+
+@win_only
+def test_bat_path_with_parens_no_space_rejected(tmp_path: Path) -> None:
+    d = tmp_path / "a(b)"
+    d.mkdir()
+    bat = d / "x.bat"
+    bat.write_text("@echo ran\r\n", encoding="ascii")
+    assert run_command([str(bat)], RunOptions(cwd=tmp_path)).outcome == "error"
+
+
 def test_on_start_failure_kills_child(tmp_path: Path) -> None:
     seen: list[int] = []
 
@@ -173,6 +202,19 @@ def test_filter_config_blocks_status(git_repo: Path, tmp_path: Path) -> None:
     assert not marker.exists()
 
 
+def test_worktree_scope_filter_blocked(git_repo: Path, tmp_path: Path) -> None:
+    marker, cmd = _marker_script(tmp_path, "wtfilter")
+    git(git_repo, "config", "extensions.worktreeConfig", "true")
+    git(git_repo, "config", "--worktree", "filter.x.clean", str(cmd))
+    (git_repo / ".git" / "info").mkdir(exist_ok=True)
+    (git_repo / ".git" / "info" / "attributes").write_text("*.py filter=x\n", encoding="utf-8")
+    (git_repo / "src" / "calc.py").write_text("changed\n", encoding="utf-8")
+    info = gitinfo.get_info(git_repo)
+    assert info.blocked_reason and "filter.x.clean" in info.blocked_reason
+    assert info.dirty is None  # unknown, never reported as clean
+    assert not marker.exists()
+
+
 def test_textconv_and_external_diff_not_executed(git_repo: Path, tmp_path: Path) -> None:
     marker, cmd = _marker_script(tmp_path, "textconv")
     git(git_repo, "config", "diff.external", str(cmd))
@@ -273,6 +315,18 @@ def test_decode_encodings_and_binary(tmp_path: Path) -> None:
     binf.write_bytes(b"abc\x00def")
     with pytest.raises(ValueError):
         read_text_info(binf)
+
+
+def test_cloud_reparse_dir_not_treated_as_link() -> None:
+    from types import SimpleNamespace
+
+    from app.services.fswalk import is_link_or_junction
+
+    entry = SimpleNamespace(
+        is_symlink=lambda: False, is_junction=lambda: False,
+        stat=lambda follow_symlinks=False: SimpleNamespace(st_file_attributes=0x400 | 0x10, st_mode=0o040777),
+    )
+    assert is_link_or_junction(entry) is False
 
 
 def test_walk_skips_binary_gitignore(tmp_path: Path) -> None:

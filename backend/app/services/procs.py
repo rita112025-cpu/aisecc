@@ -16,6 +16,7 @@ from pathlib import Path
 import psutil
 
 CMD_UNSAFE = re.compile(r'[&|<>^%!"()\r\n]')
+CMD_UNSAFE_EXE = re.compile(r'[&|<>^%!"\r\n]')
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 BELOW_NORMAL_PRIORITY_CLASS = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -114,12 +115,20 @@ def run_command(argv: Sequence[str], opts: RunOptions) -> ProcResult:
     # .cmd/.bat shims need cmd.exe, which re-parses the command line: & | < > ^ % ! " ( ) and
     # newlines cannot be escaped reliably (quoted %VAR% still expands), so refuse such arguments.
     if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
-        # The executable path is quoted by list2cmdline (spaces), so only "(x86)"-style parens are
-        # common there; % and ! would still expand, hence the narrower check for argv[0].
-        unsafe = [a for a in argv[1:] if CMD_UNSAFE.search(a)] + [a for a in argv[:1] if re.search(r"[%!\"]", a)]
+        # list2cmdline quotes argv[0] only when it contains a space, so "(x86)"-style parens are safe
+        # there only in that case; every other metacharacter is refused like for the arguments.
+        exe_unsafe = CMD_UNSAFE_EXE.search(argv[0]) or (
+            ("(" in argv[0] or ")" in argv[0]) and " " not in argv[0])
+        unsafe = ([argv[0]] if exe_unsafe else []) + [a for a in argv[1:] if CMD_UNSAFE.search(a)]
         if unsafe:
             return ProcResult(argv, None, "error", 0.0, error=f"參數含 cmd 特殊字元，拒絕執行：{unsafe[0]!r}")
-        argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", *argv]
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        # /s strips the outermost quote pair, so wrap the already-quoted command line once more;
+        # otherwise a quoted path with spaces ("C:\Program Files\...\npm.cmd") loses its quotes.
+        command_line: str | list[str] = f'"{comspec}" /d /s /c "{subprocess.list2cmdline(argv)}"'
+        argv = [comspec, "/d", "/s", "/c", *argv]
+    else:
+        command_line = argv
 
     env = dict(opts.env if opts.env is not None else os.environ)
     env.update(opts.extra_env)
@@ -130,8 +139,8 @@ def run_command(argv: Sequence[str], opts: RunOptions) -> ProcResult:
 
     flags = CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW
     try:
-        proc = subprocess.Popen(  # noqa: S603 - argv list, shell=False
-            argv,
+        proc = subprocess.Popen(  # noqa: S603 - shell=False; cmd.exe line built from validated argv
+            command_line,
             cwd=str(opts.cwd),
             env=env,
             stdin=subprocess.DEVNULL,

@@ -42,6 +42,7 @@ def _env() -> dict[str, str]:
 SAFE_CONFIG = (
     "-c", "core.quotepath=off", "-c", "color.ui=never", "-c", "core.fsmonitor=false",
     "-c", "core.untrackedCache=false", "-c", "diff.external=", "-c", "core.pager=cat",
+    "-c", f"core.hooksPath={os.devnull}",
 )
 UNSAFE_LOCAL_KEYS = re.compile(
     r"^(filter\..+\.(clean|smudge|process)|diff\..+\.(textconv|command)|include\.path|includeif\..+\.path)$",
@@ -136,7 +137,8 @@ class GitInfo:
     upstream: str | None = None
     ahead: int | None = None
     behind: int | None = None
-    dirty: bool = False
+    # None = unknown (status skipped because repo config is untrusted); callers must treat it as dirty.
+    dirty: bool | None = False
     entries: list[StatusEntry] = field(default_factory=list)
     entries_truncated: bool = False
     counts: dict[str, int] = field(default_factory=dict)
@@ -189,8 +191,15 @@ def _entry(xy: str, path: str) -> StatusEntry:
 
 def unsafe_local_config(repo: Path) -> list[str]:
     """Repo-local config keys that could make git execute programs. Reading config runs nothing."""
-    out = run_git(repo, "config", "--local", "--list", "--name-only", check=False, timeout=15)
-    return sorted({k for k in out.splitlines() if UNSAFE_LOCAL_KEYS.match(k.strip())})
+    # local and worktree (.git/config.worktree) scopes are repo-controlled; system/global/command
+    # scopes belong to the user and are trusted.
+    out = run_git(repo, "config", "--list", "--show-scope", "--name-only", check=False, timeout=15)
+    keys = set()
+    for line in out.splitlines():
+        scope, _, key = line.strip().partition("\t")
+        if scope in ("local", "worktree") and UNSAFE_LOCAL_KEYS.match(key):
+            keys.add(key)
+    return sorted(keys)
 
 
 def ensure_safe_config(repo: Path, allow_repo_config: bool) -> None:
@@ -213,6 +222,7 @@ def get_info(repo: Path, allow_repo_config: bool = False) -> GitInfo:
         ensure_safe_config(repo, allow_repo_config)
     except GitUntrustedConfig as exc:
         info.blocked_reason = str(exc)
+        info.dirty = None
         info.branch = current_branch(repo)
         info.head = head_commit(repo)
         return info

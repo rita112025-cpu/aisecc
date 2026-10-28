@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,9 +17,12 @@ from app.services.analysis.base import RawFinding, assign_fingerprints, load_sou
 from app.services.analysis.report import write_reports
 from app.services.analysis.tools import TOOLS, ToolContext, ToolResult, authorised
 from app.services.detect import detect
-from app.services.fswalk import walk
+from app.services.fswalk import resolve_inside, walk
 from app.services.jobs import JobCancelled, JobContext
 from app.services.settings_store import load_settings
+
+MAX_PER_RULE = 2000
+BATCH_SIZE = 500
 
 
 @dataclass
@@ -55,7 +60,8 @@ def run_analysis(root: Path, opts: AnalysisOptions, ctx: JobContext | None = Non
                              "duration_sec": 0.0, "command": None}
 
     step(0.1, "內建分析：敏感資訊")
-    builtin("builtin-secrets", lambda: secrets.scan_secrets(index))
+    secret_findings, secret_values = secrets.scan_secrets(index)
+    builtin("builtin-secrets", lambda: secret_findings)
     step(0.15, "內建分析：複雜度")
     builtin("builtin-metrics", lambda: _metrics(index, settings.complexity_threshold,
                                                 settings.function_length_threshold))
@@ -70,7 +76,7 @@ def run_analysis(root: Path, opts: AnalysisOptions, ctx: JobContext | None = Non
         root=root, languages=det.languages, manifests=det.manifests,
         allow_project_tools=opts.allow_project_tools, allow_network_audit=opts.allow_network_audit,
         timeout_sec=settings.tool_timeout_sec, cancel_event=ctx.cancel_event if ctx else None,
-        log_path=ctx.log_path if ctx else None, on_start=ctx.register_process if ctx else None,
+        on_start=ctx.register_process if ctx else None,
     )
     selected = [t for t in TOOLS if opts.tools is None or t.name in opts.tools]
     for i, tool in enumerate(selected):
@@ -88,10 +94,14 @@ def run_analysis(root: Path, opts: AnalysisOptions, ctx: JobContext | None = Non
         result = tool.run(tctx)
         if result.state == "cancelled":
             raise JobCancelled()
-        findings.extend(result.findings)
-        tool_status[tool.name] = result.status_dict()
+        kept, dropped = _inside_project(root, result.findings)
+        findings.extend(kept)
+        tool_status[tool.name] = result.status_dict() | {"findings": len(kept), "dropped_out_of_tree": dropped}
         if ctx:
-            ctx.log(f"{tool.name}: {result.state} {result.message}".strip())
+            ctx.log(secrets.redact(f"{tool.name}: {result.state} {result.message}".strip(), secret_values))
+
+    findings = _redact_all(findings, secret_values)
+    findings = _cap_per_rule(findings, tool_status)
 
     meta = {
         "file_count": len(walked.files),
@@ -104,31 +114,75 @@ def run_analysis(root: Path, opts: AnalysisOptions, ctx: JobContext | None = Non
     return assign_fingerprints(findings, index), tool_status, meta
 
 
+def _inside_project(root: Path, findings: list[RawFinding]) -> tuple[list[RawFinding], int]:
+    """Tool output is untrusted (eslint/tsc run project code): drop paths outside the project."""
+    kept, dropped = [], 0
+    for f in findings:
+        if f.file_path:
+            try:
+                resolved = resolve_inside(root, f.file_path, must_exist=False)
+            except (ValueError, FileNotFoundError):
+                dropped += 1
+                continue
+            f.file_path = resolved.relative_to(Path(os.path.realpath(root))).as_posix()
+        kept.append(f)
+    return kept, dropped
+
+
+def _redact_all(findings: list[RawFinding], values: set[str]) -> list[RawFinding]:
+    for f in findings:
+        f.message = secrets.redact(f.message, values)
+        f.extra = json.loads(secrets.redact(json.dumps(f.extra, ensure_ascii=False), values))
+    return findings
+
+
+def _cap_per_rule(findings: list[RawFinding], tool_status: dict[str, Any]) -> list[RawFinding]:
+    counts: Counter[tuple[str, str]] = Counter()
+    kept = []
+    for f in findings:
+        key = (f.tool, f.rule_id)
+        counts[key] += 1
+        if counts[key] <= MAX_PER_RULE:
+            kept.append(f)
+    for (tool, rule), n in counts.items():
+        if n > MAX_PER_RULE:
+            st = tool_status.setdefault(tool, {"state": "ok", "message": ""})
+            st["truncated"] = True
+            st.setdefault("truncated_rules", {})[rule] = n
+    return kept
+
+
 def _metrics(index, complexity: int, length: int) -> tuple[list[RawFinding], list[str]]:  # noqa: ANN001
     py, errors = code_metrics.python_complexity(index, complexity, length)
     return py + code_metrics.js_complexity(index, complexity, length), errors
 
 
 def persist_findings(scan_id: int, project_id: int, findings: list[RawFinding]) -> dict[str, Any]:
-    """Idempotent insert keyed by (fingerprint, occurrence); carries forward triage decisions."""
-    with write_session() as s:
-        suppressions = {
-            sup.fingerprint: sup for sup in s.query(FindingSuppression).filter_by(project_id=project_id).all()
-        }
+    """Idempotent insert keyed by (fingerprint, occurrence); carries forward triage decisions.
+
+    Commits in batches so a large scan never holds the SQLite write lock for long.
+    """
+    with read_session() as s:
+        suppressions = {sup.fingerprint: (sup.status, sup.note)
+                        for sup in s.query(FindingSuppression).filter_by(project_id=project_id).all()}
         existing = {(fp, occ) for fp, occ in s.query(Finding.fingerprint, Finding.occurrence).filter_by(
             scan_id=scan_id)}
-        for f in findings:
-            if (f.fingerprint, f.occurrence) in existing:
-                continue
-            sup = suppressions.get(f.fingerprint)
-            s.add(Finding(
-                scan_id=scan_id, project_id=project_id, tool=f.tool, rule_id=f.rule_id[:120], severity=f.severity,
-                category=f.category, confidence=f.confidence, file_path=f.file_path, line=f.line, column=f.column,
-                end_line=f.end_line, message=f.message[:4000], fingerprint=f.fingerprint, occurrence=f.occurrence,
-                triage_status=sup.status if sup else "open", triage_note=sup.note if sup else None, extra=f.extra,
-            ))
-            existing.add((f.fingerprint, f.occurrence))
+    pending = [f for f in findings if (f.fingerprint, f.occurrence) not in existing]
+    for start in range(0, len(pending), BATCH_SIZE):
+        with write_session() as s:
+            for f in pending[start:start + BATCH_SIZE]:
+                _add_finding(s, scan_id, project_id, f, suppressions.get(f.fingerprint))
     return summarise(scan_id)
+
+
+def _add_finding(s, scan_id: int, project_id: int, f: RawFinding,  # noqa: ANN001 - Session
+                 sup: tuple[str, str | None] | None) -> None:
+    s.add(Finding(
+        scan_id=scan_id, project_id=project_id, tool=f.tool, rule_id=f.rule_id[:120], severity=f.severity,
+        category=f.category, confidence=f.confidence, file_path=f.file_path, line=f.line, column=f.column,
+        end_line=f.end_line, message=f.message[:4000], fingerprint=f.fingerprint, occurrence=f.occurrence,
+        triage_status=sup[0] if sup else "open", triage_note=sup[1] if sup else None, extra=f.extra,
+    ))
 
 
 def summarise(scan_id: int) -> dict[str, Any]:

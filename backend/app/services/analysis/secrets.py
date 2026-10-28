@@ -61,8 +61,29 @@ def mask(value: str) -> str:
     return f"{value[:4]}…{value[-2:]}（長度 {len(value)}）"
 
 
-def scan_secrets(index: SourceIndex) -> list[RawFinding]:
+def redact(text: str, values: set[str]) -> str:
+    """Mask known secret values and anything matching a secret rule before text is persisted."""
+    for v in sorted(values, key=len, reverse=True):
+        if v and v in text:
+            text = text.replace(v, mask(v))
+    for rule in RULES:
+        text = rule.pattern.sub(lambda m, r=rule: _mask_match(m, r), text)
+    return text
+
+
+def _mask_match(m: re.Match[str], rule: Rule) -> str:
+    value = m.group(rule.group)
+    if rule.group and PLACEHOLDER.match(value):
+        return m.group(0)
+    start, end = m.start(rule.group) - m.start(), m.end(rule.group) - m.start()
+    whole = m.group(0)
+    return whole[:start] + mask(value) + whole[end:]
+
+
+def scan_secrets(index: SourceIndex) -> tuple[list[RawFinding], set[str]]:
+    """Returns findings (messages already masked) and the raw values, for redacting other outputs."""
     findings: list[RawFinding] = []
+    values: set[str] = set()
     for f in index.files.values():
         in_test_path = bool(SKIP_PATH.search(f.rel))
         for lineno, line in enumerate(f.lines, start=1):
@@ -75,6 +96,7 @@ def scan_secrets(index: SourceIndex) -> list[RawFinding]:
                         continue
                     if rule.min_entropy and shannon_entropy(value) < rule.min_entropy:
                         continue
+                    values.add(value)
                     severity = "low" if in_test_path else rule.severity
                     findings.append(RawFinding(
                         tool="builtin-secrets", rule_id=rule.id, severity=severity, category="secret",
@@ -82,4 +104,4 @@ def scan_secrets(index: SourceIndex) -> list[RawFinding]:
                         column=m.start(rule.group) + 1, confidence="heuristic",
                         extra={"in_test_path": in_test_path},
                     ))
-    return findings
+    return findings, values

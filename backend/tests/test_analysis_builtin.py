@@ -27,7 +27,7 @@ def _index(tmp_path: Path, files: dict[str, str]) -> SourceIndex:
 
 def test_secrets_detects_and_masks(tmp_path: Path) -> None:
     idx = _index(tmp_path, {"app/config.py": 'API_KEY = "Zq8vR2kLm9Xw4TnB7pQs"\naws = "AKIAABCDEFGHIJKLMNOP"\n'})
-    fs = scan_secrets(idx)
+    fs, _ = scan_secrets(idx)
     rules = {f.rule_id for f in fs}
     assert rules == {"hardcoded-password", "aws-access-key"}
     assert all("Zq8vR2kLm9Xw4TnB7pQs" not in f.message and "AKIAABCDEFGHIJKLMNOP" not in f.message for f in fs)
@@ -36,18 +36,18 @@ def test_secrets_detects_and_masks(tmp_path: Path) -> None:
 
 def test_secrets_ignores_placeholders_and_low_entropy(tmp_path: Path) -> None:
     idx = _index(tmp_path, {"a.py": 'password = "changeme"\nsecret = "${SECRET}"\napi_key = "aaaaaaaa"\n'})
-    assert scan_secrets(idx) == []
+    assert scan_secrets(idx)[0] == []
 
 
 def test_secrets_in_tests_downgraded(tmp_path: Path) -> None:
     idx = _index(tmp_path, {"tests/test_x.py": 'token = "ghp_' + "a1B2" * 10 + '"\n'})
-    (f,) = scan_secrets(idx)
+    (f,), _ = scan_secrets(idx)
     assert f.severity == "low" and f.extra["in_test_path"]
 
 
 def test_private_key_detected_in_env_file(tmp_path: Path) -> None:
     idx = _index(tmp_path, {"deploy/.env": "KEY=-----BEGIN RSA PRIVATE KEY-----\n"})
-    assert [f.rule_id for f in scan_secrets(idx)] == ["private-key"]
+    assert [f.rule_id for f in scan_secrets(idx)[0]] == ["private-key"]
 
 
 def test_entropy_and_mask() -> None:
@@ -139,15 +139,15 @@ def test_fingerprint_stable_when_code_moves(tmp_path: Path) -> None:
     code = 'password = "Zq8vR2kLm9Xw4TnB"\n'
     idx1 = _index(tmp_path / "v1", {"a.py": code})
     idx2 = _index(tmp_path / "v2", {"a.py": "\n\n\n" + code})
-    f1 = assign_fingerprints(scan_secrets(idx1), idx1)[0]
-    f2 = assign_fingerprints(scan_secrets(idx2), idx2)[0]
+    f1 = assign_fingerprints(scan_secrets(idx1)[0], idx1)[0]
+    f2 = assign_fingerprints(scan_secrets(idx2)[0], idx2)[0]
     assert f1.line == 1 and f2.line == 4 and f1.fingerprint == f2.fingerprint
 
 
 def test_fingerprint_occurrence_for_identical_lines(tmp_path: Path) -> None:
     code = 'password = "Zq8vR2kLm9Xw4TnB"\n' * 2
     idx = _index(tmp_path, {"a.py": code})
-    fs = assign_fingerprints(scan_secrets(idx), idx)
+    fs = assign_fingerprints(scan_secrets(idx)[0], idx)
     assert [f.occurrence for f in fs] == [0, 1] and fs[0].fingerprint == fs[1].fingerprint
 
 

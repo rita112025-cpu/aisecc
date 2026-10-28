@@ -28,6 +28,8 @@ def health_report(
     git = inventory.get("git", {})
     if not git.get("is_repo"):
         deduct(10, "不是 Git 儲存庫，無法追蹤變更")
+    elif git.get("dirty") is None:
+        notes.append("Git 工作目錄狀態未知（儲存庫設定受限，需授權後才讀取）")
     elif git.get("dirty"):
         n = sum(git.get("counts", {}).values())
         deduct(min(10, 2 + n * 0.2), f"工作目錄有 {n} 個未提交變更")

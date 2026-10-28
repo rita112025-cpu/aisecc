@@ -12,7 +12,7 @@
 | psutil | 程序樹終止、記憶體上限、孤兒程序清理 | 已安裝，**請確認** |
 | pathspec | `.gitignore` 語法比對（自行實作易錯） | 已安裝，**請確認** |
 | httpx | Ollama/AI Provider HTTP 呼叫、API 測試 | 已安裝，**請確認** |
-| jinja2 | HTML 報告 | 已安裝，**請確認** |
+| ~~jinja2~~ | 依審查意見移除，HTML 報告改用 html.escape | 已移除 |
 | ruff, bandit, pip-audit, pytest-cov, pytest-timeout | 分析工具（dev） | 已安裝，**請確認** |
 | ~~chardet~~ | 依審查意見移除，改用 utf-8 → utf-8-sig → utf-16 BOM → cp950 → latin-1 | 已移除 |
 
@@ -58,7 +58,7 @@
 | 未安裝／逾時／輸出異常 → not_installed／timeout／error，不算通過；有工具未執行時 scan=partial | DONE | `test_tool_missing_is_not_pass`、`test_tool_timeout_reported`、`test_malformed_tool_output_is_error`、`test_api_full_scan_is_partial_when_tools_skipped` |
 | Ruff、Bandit 實際執行並轉換為檔案＋行號 | DONE | `test_real_ruff_and_bandit_findings` |
 | ESLint／tsc（node.exe 直接執行 package bin，不經 .cmd） | PARTIAL | 已實作；本環境無含 node_modules 的範例專案，未做實際執行測試 |
-| npm audit（--package-lock-only --ignore-scripts）／pip-audit（--no-deps --disable-pip） | PARTIAL | 已實作授權閘門測試；實際連網稽核未在自動測試中執行 |
+| npm audit（只複製 package.json/lock 到暫存目錄、node.exe+npm-cli.js、強制 registry.npmjs.org、移除 NPM_TOKEN/npm_config_*）／pip-audit（只保留 name==version 行、--no-deps --disable-pip） | PARTIAL | `test_npm_audit_isolated_from_project_npmrc`、`test_pip_audit_receives_only_pinned_lines`；實際連網稽核未在自動測試中執行 |
 | Semgrep（選用） | BLOCKED | 本機未安裝 → not_installed；替代驗證：授權/未安裝狀態測試 |
 | 硬編碼密碼與敏感資訊（遮罩、測試路徑降級、佔位字過濾、熵值） | DONE | `test_secrets_*` |
 | 複雜度、過大函式（Python AST；JS/TS 啟發式） | DONE | `test_python_complexity_and_length`、`test_js_complexity_heuristic` |
@@ -68,7 +68,11 @@
 | fingerprint（不含行號）＋ occurrence；冪等寫入；移動程式碼判為未變 | DONE | `test_fingerprint_*`、`test_persist_is_idempotent_and_keeps_duplicates`、`test_api_analyze_triage_diff_and_reports` |
 | 誤報處理：triage（誤報/接受風險需理由）並依 fingerprint 帶入後續掃描 | DONE | 同上 |
 | 搜尋、過濾、排序 findings | DONE | 同上 |
-| JSON 與 HTML 報告（jinja2 autoescape） | DONE | 同上 |
+| JSON 與 HTML 報告（html.escape） | DONE | 同上 |
+| 機密不外洩：findings/extra/報告/job log 全部經 redact；工具原始輸出不寫入 log | DONE | `test_secret_never_persisted_anywhere` |
+| 工具輸出路徑經 resolve_inside 驗證，專案外路徑丟棄並計數 | DONE | `test_out_of_tree_tool_paths_dropped`、`test_engine_records_dropped_count` |
+| 每個 tool/rule 上限 2000 筆（truncated 標記）、minified/bundle 檔跳過、findings 每 500 筆分批寫入 | DONE | `test_per_rule_cap`、`test_minified_files_skipped` |
+| 分析中取消 → scan 與 job 皆 cancelled；分析期間 API 寫入不被阻塞 | DONE | `test_analysis_cancel_marks_scan_and_job` |
 
 ## Phase 5–8
 | 模組 | 狀態 |

@@ -101,6 +101,17 @@ def test_git_endpoints(client: TestClient, git_repo: Path) -> None:
     assert client.get(f"/api/projects/{pid}/git/diff", params={"base": "--evil"}).status_code == 400
 
 
+def test_git_endpoint_empty_repo(client: TestClient, tmp_path: Path) -> None:
+    from tests.conftest import git
+
+    repo = tmp_path / "empty repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    pid = client.post("/api/projects", json={"path": str(repo)}).json()["id"]
+    r = client.get(f"/api/projects/{pid}/git")
+    assert r.status_code == 200 and r.json()["head"] is None and r.json()["is_repo"] is True
+
+
 def test_inventory_scan_job_and_compare(client: TestClient, git_repo: Path) -> None:
     pid = client.post("/api/projects", json={"path": str(git_repo)}).json()["id"]
     j1 = client.post(f"/api/projects/{pid}/scan").json()["job_id"]

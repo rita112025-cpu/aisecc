@@ -18,6 +18,10 @@ TEXT_SUFFIXES = SOURCE_SUFFIXES + (
 )
 
 
+MINIFIED_SUFFIXES = (".min.js", ".min.css", ".map", ".bundle.js")
+MINIFIED_AVG_LINE = 300
+
+
 @dataclass
 class RawFinding:
     tool: str
@@ -71,13 +75,25 @@ def load_sources(root: Path, walked: WalkResult, max_file_bytes: int) -> SourceI
         if entry.size > max_file_bytes:
             index.skipped.append(entry.rel)
             continue
+        if entry.rel.lower().endswith(MINIFIED_SUFFIXES):
+            index.skipped.append(entry.rel)
+            continue
         try:
             text, enc = read_text_info(root / entry.rel)
         except (OSError, ValueError):
             index.skipped.append(entry.rel)
             continue
+        if is_minified(text):
+            index.skipped.append(entry.rel)
+            continue
         index.files[entry.rel] = SourceFile(entry.rel, text, enc)
     return index
+
+
+def is_minified(text: str) -> bool:
+    """Generated/minified bundles would flood duplication and complexity results."""
+    lines = text.count("\n") + 1
+    return len(text) > 2000 and len(text) / lines > MINIFIED_AVG_LINE
 
 
 _WS = re.compile(r"\s+")

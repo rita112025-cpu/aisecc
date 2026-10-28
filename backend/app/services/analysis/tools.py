@@ -13,16 +13,20 @@ A tool that did not run is never reported as passing: its state says why.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.config import get_settings
 from app.services.analysis.base import RawFinding, normalise_severity
+from app.services.fswalk import read_text
 from app.services.procs import ProcResult, RunOptions, run_command
 
 VENV_SCRIPTS = Path(sys.executable).parent
@@ -39,7 +43,6 @@ class ToolContext:
     allow_network_audit: bool
     timeout_sec: float
     cancel_event: threading.Event | None = None
-    log_path: Path | None = None
     on_start: Callable[[int, float], None] | None = None
 
 
@@ -75,10 +78,13 @@ def _rel(root: Path, filename: str) -> str:
         return filename.replace("\\", "/")
 
 
-def _exec(ctx: ToolContext, argv: list[str], cwd: Path | None = None) -> ProcResult:
+def _exec(ctx: ToolContext, argv: list[str], cwd: Path | None = None,
+          env: dict[str, str] | None = None) -> ProcResult:
+    # Raw tool output is not written to the job log: it can contain source lines with secrets
+    # (e.g. bandit's "code" field). The engine logs a redacted summary instead.
     return run_command(argv, RunOptions(
         cwd=cwd or ctx.root, timeout_sec=ctx.timeout_sec, cancel_event=ctx.cancel_event,
-        log_path=ctx.log_path, on_start=ctx.on_start, max_memory_mb=4096,
+        on_start=ctx.on_start, max_memory_mb=4096, env=env,
     ))
 
 
@@ -264,19 +270,46 @@ def run_tsc(ctx: ToolContext) -> ToolResult:
 
 # ---- network audits ------------------------------------------------------------------------
 
+NPM_REGISTRY = "https://registry.npmjs.org/"
+PINNED_REQ = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]*\])?\s*==\s*([A-Za-z0-9.!+_-]+)\s*(;[^#]*)?(#.*)?$")
+
+
+def _isolated_env() -> dict[str, str]:
+    """Environment without npm credentials or npm_config_* overrides."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.lower().startswith("npm_config_") and k not in ("NPM_TOKEN", "NODE_AUTH_TOKEN")}
+    return env
+
+
+def _npm_cli() -> tuple[str, Path] | None:
+    node = shutil.which("node")
+    if node is None:
+        return None
+    cli = Path(node).parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    return (node, cli) if cli.is_file() else None
+
+
 def run_npm_audit(ctx: ToolContext) -> ToolResult:
-    npm = shutil.which("npm")
-    if npm is None:
-        return ToolResult("not_installed", message="找不到 npm")
+    """npm audit on a copy of package.json/package-lock.json only, so the project's .npmrc
+    (custom registry, ${TOKEN} expansion) is never read and only registry.npmjs.org is contacted."""
+    found = _npm_cli()
+    if found is None:
+        return ToolResult("not_installed", message="找不到 node 或 npm-cli.js")
+    node, cli = found
     findings: list[RawFinding] = []
     ran, total, cmd, skipped = 0, 0.0, None, []
     for d in _package_dirs(ctx):
         lock = d / "package-lock.json"
+        label = _rel(ctx.root, str(d)) or "."
         if not lock.is_file():
-            skipped.append(f"{_rel(ctx.root, str(d)) or '.'} 無 package-lock.json")
+            skipped.append(f"{label} 無 package-lock.json")
             continue
-        cmd = [npm, "audit", "--json", "--package-lock-only", "--ignore-scripts"]
-        res = _exec(ctx, cmd, d)
+        with tempfile.TemporaryDirectory(prefix="npm-audit-", dir=_scratch_dir()) as tmp:
+            shutil.copy2(d / "package.json", Path(tmp) / "package.json")
+            shutil.copy2(lock, Path(tmp) / "package-lock.json")
+            cmd = [node, str(cli), "audit", "--json", "--package-lock-only", "--ignore-scripts",
+                   f"--registry={NPM_REGISTRY}"]
+            res = _exec(ctx, cmd, Path(tmp), env=_isolated_env())
         total += res.duration_sec
         if fail := _outcome_failure(res):
             return fail
@@ -299,6 +332,22 @@ def run_npm_audit(ctx: ToolContext) -> ToolResult:
     return ToolResult("ok", findings, "; ".join(skipped), total, cmd)
 
 
+def sanitise_requirements(text: str) -> tuple[list[str], list[str]]:
+    """Keep only `name==version` lines; options (-r/-c/-e/--index-url), URLs and unpinned specs are
+    dropped with a reason, so pip-audit never reads other files or contacts other hosts."""
+    kept, dropped = [], []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = PINNED_REQ.match(line)
+        if m:
+            kept.append(f"{m.group(1)}{m.group(2) or ''}=={m.group(3)}")
+        else:
+            dropped.append(line[:120])
+    return kept, dropped
+
+
 def run_pip_audit(ctx: ToolContext) -> ToolResult:
     local = VENV_SCRIPTS / ("pip-audit.exe" if sys.platform == "win32" else "pip-audit")
     exe = str(local) if local.exists() else shutil.which("pip-audit")
@@ -310,15 +359,27 @@ def run_pip_audit(ctx: ToolContext) -> ToolResult:
     findings: list[RawFinding] = []
     total, cmd, notes, ran = 0.0, None, [], 0
     for rel in reqs:
-        # --no-deps --disable-pip: never build/install anything; requires pinned requirements.
-        cmd = [exe, "-r", rel, "--no-deps", "--disable-pip", "-f", "json", "--progress-spinner", "off"]
-        res = _exec(ctx, cmd)
+        try:
+            kept, dropped = sanitise_requirements(read_text(ctx.root / rel))
+        except (OSError, ValueError) as exc:
+            notes.append(f"{rel}: 無法讀取（{exc}）")
+            continue
+        if dropped:
+            notes.append(f"{rel}: 略過 {len(dropped)} 行（非 name==version）")
+        if not kept:
+            continue
+        with tempfile.TemporaryDirectory(prefix="pip-audit-", dir=_scratch_dir()) as tmp:
+            clean = Path(tmp) / "requirements.txt"
+            clean.write_text("\n".join(kept) + "\n", encoding="utf-8")
+            # --no-deps --disable-pip: never build/install anything.
+            cmd = [exe, "-r", str(clean), "--no-deps", "--disable-pip", "-f", "json", "--progress-spinner", "off"]
+            res = _exec(ctx, cmd, Path(tmp), env=_isolated_env())
         total += res.duration_sec
         if fail := _outcome_failure(res):
             return fail
         data, err = _json_or_error(res)
         if err:
-            notes.append(f"{rel}: 無法稽核（可能有未固定版本的套件）")
+            notes.append(f"{rel}: pip-audit 執行失敗（exit {res.exit_code}）")
             continue
         ran += 1
         deps = data.get("dependencies", data) if isinstance(data, dict) else data
@@ -331,8 +392,15 @@ def run_pip_audit(ctx: ToolContext) -> ToolResult:
                     extra={"package": dep.get("name"), "aliases": vuln.get("aliases", []),
                            "description": (vuln.get("description") or "")[:500]}))
     if ran == 0:
-        return ToolResult("error", message="; ".join(notes), duration_sec=total, command=cmd)
+        state = "skipped" if not any("失敗" in n or "無法" in n for n in notes) else "error"
+        return ToolResult(state, message="; ".join(notes) or "沒有已固定版本的依賴", duration_sec=total, command=cmd)
     return ToolResult("ok", findings, "; ".join(notes), total, cmd)
+
+
+def _scratch_dir() -> Path:
+    d = get_settings().workspaces_dir / "tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def run_semgrep(ctx: ToolContext) -> ToolResult:
