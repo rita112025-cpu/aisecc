@@ -89,4 +89,6 @@
 | 2026-10-28 | 同上 | 30 passed（審查輪次 1 修正） |
 | 2026-10-28 | 同上 | 77 passed（Phase 3 模組 A） |
 | 2026-10-28 | 同上 `-rs` | 115 passed，0 skipped（審查輪次 1–2 修正） |
+| 2026-10-28 | 同上 | 145 passed（Phase 4 模組 B） |
+| 2026-10-28 | 同上 `-rs` | 161 passed，0 skipped（審查輪次 2–3 修正） |
 | 2026-10-28 | `..\.venv\Scripts\ruff.exe check .` | All checks passed |
