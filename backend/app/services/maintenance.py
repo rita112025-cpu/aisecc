@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sqlite3
+from collections.abc import Iterable
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -112,6 +113,15 @@ def _cleanup_staged(staged: Path) -> None:
         p.unlink(missing_ok=True)
 
 
+def _norm(path: str | Path) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _norm_paths(paths: Iterable[str | None]) -> set[str]:
+    """Stored workspace paths may differ in case/separators from what glob returns."""
+    return {_norm(p) for p in paths if p}
+
+
 def recover_records(settings: Settings) -> dict[str, int]:
     """Called at startup after job recovery: nothing can be running yet, so any run/scan still
     marked running was interrupted, and repair workspaces without a pending proposal are orphans."""
@@ -127,13 +137,14 @@ def recover_records(settings: Settings) -> dict[str, int]:
         for p in s.query(RepairProposal).filter(RepairProposal.status == "generating"):
             p.status, p.error = "failed", "後端重新啟動，產生過程中斷"
             counts["repairs"] += 1
-        keep = {p.workspace_path for p in s.query(RepairProposal).filter(RepairProposal.status == "validated")}
+        keep = _norm_paths(p.workspace_path for p in s.query(RepairProposal).filter(
+            RepairProposal.status == "validated"))
         if any(counts.values()):
             audit.record("system.recover", detail=dict(counts), session=s)
     ws_root = settings.workspaces_dir
     if ws_root.is_dir():
         for d in ws_root.glob("repair-*"):
-            if str(d) not in keep:
+            if _norm(d) not in keep:
                 try:
                     workspace.safe_rmtree(d, ws_root)
                     counts["workspaces"] += 1
@@ -169,9 +180,10 @@ def apply_retention(settings: Settings, now: datetime | None = None, dry_run: bo
         for prefix in PROTECTED_AUDIT_PREFIXES:
             audit_q = audit_q.filter(~AuditLog.action.startswith(prefix))
         old_audit = [aid for (aid,) in audit_q]
-        keep_ws = {p.workspace_path for p in s.query(RepairProposal).filter(RepairProposal.status == "validated")}
+        keep_ws = _norm_paths(p.workspace_path for p in s.query(RepairProposal).filter(
+            RepairProposal.status == "validated"))
     orphan_ws = [d for d in settings.workspaces_dir.glob("repair-*")
-                 if str(d) not in keep_ws and d.stat().st_mtime < (now - timedelta(days=1)).replace(
+                 if _norm(d) not in keep_ws and d.stat().st_mtime < (now - timedelta(days=1)).replace(
                      tzinfo=UTC).timestamp()] if settings.workspaces_dir.is_dir() else []
     files = [settings.reports_dir / f"scan-{sid}.{ext}" for sid in old_scans for ext in ("json", "html")]
     files += [Path(lp) for _, lp in old_jobs if lp and settings.logs_dir in Path(lp).parents]

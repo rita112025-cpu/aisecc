@@ -324,3 +324,17 @@ def test_masked_secret_in_replace_rejected() -> None:
         parse_response(json.dumps(bad))
     banner = FIX | {"edits": [FIX["edits"][0] | {"replace": "# ************\n    return a / b if b else 0"}]}
     assert parse_response(json.dumps(banner))
+
+
+def test_recover_keeps_validated_workspace_despite_path_spelling(db: Path, settings: Settings, tmp_path: Path) -> None:
+    ws = settings.workspaces_dir / "repair-5"
+    ws.mkdir(parents=True)
+    spelled = str(ws).replace("\\", "/")
+    spelled = spelled[0].swapcase() + spelled[1:]
+    with write_session() as s:
+        p = Project(name="p", path=str(tmp_path), path_key="p")
+        s.add(p)
+        s.flush()
+        s.add(RepairProposal(project_id=p.id, provider="x", status="validated", workspace_path=spelled))
+    recover_records(settings)
+    assert ws.is_dir()
