@@ -12,3 +12,4 @@ frontend/playwright-report/
 data/
 *.log
 .run/
+.claude/

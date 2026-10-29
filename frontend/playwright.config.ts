@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 // E2E runs the real backend (serving the built frontend) on its own port with a throwaway data dir,
 // so it never touches the user's data/ folder.
-const PORT = 8799;
+// Fixed non-default port with reuseExistingServer=false: if the port is taken the run fails instead
+// of attaching to (and polluting) a running instance. Override with AISECC_E2E_PORT.
+const PORT = Number(process.env.AISECC_E2E_PORT ?? 8799);
 const dataDir = process.env.AISECC_E2E_DATA ?? mkdtempSync(path.join(tmpdir(), "aisecc-e2e-"));
 process.env.AISECC_E2E_DATA = dataDir;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

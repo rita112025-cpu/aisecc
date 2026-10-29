@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, qs } from "../api";
+import { api, qs, sha256Hex } from "../api";
 import { AsyncView, ErrorBox, StatusBadge } from "../components/common";
 import { DiffView } from "../components/DiffView";
 import { JobPanel } from "../components/JobPanel";
@@ -138,8 +138,10 @@ function RepairDetail({ id, refresh, onChanged }: { id: number; refresh: number;
                 )}
                 <button className="primary" disabled={act.busy || (needsAck && !ack)} onClick={async () => {
                   if (!window.confirm(`將以上 diff 套用到專案（${r.files.length} 個檔案，會先備份，不會 commit）。確定？`)) return;
-                  if (await act.run(() => api.post(`/repairs/${r.id}/apply`, {
-                    confirm: true, diff_sha256: r.validation.diff_sha256,
+                  // Hash the diff text actually displayed, so the server can verify that what the
+                  // user reviewed is exactly what will be applied.
+                  if (await act.run(async () => api.post(`/repairs/${r.id}/apply`, {
+                    confirm: true, diff_sha256: await sha256Hex(r.diff ?? ""),
                     acknowledge_test_status: needsAck ? testStatus : null,
                   }))) onChanged();
                 }}>批准並套用</button>

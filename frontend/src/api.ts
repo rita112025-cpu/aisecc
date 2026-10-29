@@ -53,6 +53,12 @@ export const api = {
   del: (path: string) => request<void>("DELETE", path),
 };
 
+/** Hex SHA-256 of a UTF-8 string (Web Crypto; 127.0.0.1 is a secure context). */
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {

@@ -140,6 +140,10 @@
 | 測試指令批准（帶內容雜湊）、AI 套用需確認 diff 與測試狀態 | DONE | Vitest `TestsPage`、`RepairsPage` |
 | 掃描 → 判定誤報，機密不以明文顯示 | DONE | E2E `project → inventory → analysis → triage` |
 | 保存期限先試算再確認、備份 | DONE | Vitest `SettingsPage`、E2E `settings backup` |
+| 安全標頭（CSP、frame-ancestors、X-Frame-Options、nosniff；報告 sandbox）防 clickjacking | DONE | `test_security_headers`、`test_report_html_is_sandboxed`、E2E console 無錯誤 |
+| AI 套用時前端自行計算所顯示 diff 的 SHA-256 | DONE | Vitest `RepairsPage`（API 給的 hash 故意不一致） |
+| 輪詢：背景分頁暫停、4xx 停止、5xx 指數退避；即時日誌不切斷 UTF-8 | DONE | Vitest `JobPanel`、`test_read_log_never_splits_utf8` |
+| Vite dev server 已知漏洞（5.4.11） | PARTIAL | 已設 `strictPort`、只綁 127.0.0.1；升級到 ≥ 5.4.19 需使用者同意 |
 | 桌面解析度 | DONE | 固定側欄 + 流式主內容（未做行動版） |
 | E2E 規格檔型別檢查 | PARTIAL | 由 Playwright 轉譯執行並通過；`tsc` 需 `@types/node`（未核准），故 tsconfig 只涵蓋 `src` |
 
@@ -177,3 +181,5 @@
 | 2026-10-29 | `cd frontend; npx vitest run` | 19 passed |
 | 2026-10-29 | `cd frontend; npx tsc --noEmit -p .` | 0 errors |
 | 2026-10-29 | `cd frontend; npx vite build; npx playwright test` | 4 passed（真實後端、暫存資料目錄、port 8799） |
+| 2026-10-29 | `.un_tests.ps1` | pytest 254／ruff／tsc／vitest 19／build／playwright 4 全 PASS |
+| 2026-10-29 | 審查輪次 6 修正後 | pytest 270、vitest 21、playwright 4（CSP 下 9 頁 console 無錯誤） |

@@ -30,6 +30,22 @@ def _host_name(host_header: str) -> str:
     return host_header.rsplit(":", 1)[0]
 
 
+APP_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+           "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+# Reports render project-derived data: no scripts at all, sandboxed, own origin.
+REPORT_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'"
+
+
+def _secure(response, request: Request):  # noqa: ANN001, ANN202 - Starlette response
+    """Anti-clickjacking and content-type hardening for every response."""
+    is_report = request.url.path.startswith("/api/scans/") and request.url.path.endswith("/report.html")
+    response.headers["Content-Security-Policy"] = REPORT_CSP if is_report else APP_CSP
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
@@ -63,8 +79,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if request.method not in SAFE_METHODS:
             origin = request.headers.get("origin")
             if origin and (urlparse(origin).hostname or "") not in LOCAL_HOSTS:
-                return JSONResponse({"detail": "拒絕跨站請求"}, status_code=403)
-        return await call_next(request)
+                return _secure(JSONResponse({"detail": "拒絕跨站請求"}, status_code=403), request)
+        return _secure(await call_next(request), request)
 
     @app.exception_handler(DatabaseBusyError)
     async def busy_handler(_: Request, exc: DatabaseBusyError) -> JSONResponse:

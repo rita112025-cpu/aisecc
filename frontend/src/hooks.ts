@@ -58,7 +58,8 @@ export function useInterval(fn: () => void, ms: number | null) {
   ref.current = fn;
   useEffect(() => {
     if (ms === null) return;
-    const id = window.setInterval(() => ref.current(), ms);
+    // Skip ticks while the tab is in the background.
+    const id = window.setInterval(() => document.visibilityState !== "hidden" && ref.current(), ms);
     return () => window.clearInterval(id);
   }, [ms]);
 }

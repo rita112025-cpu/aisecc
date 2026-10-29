@@ -222,7 +222,8 @@ describe("RepairsPage", () => {
     await userEvent.click(apply);
     await waitFor(() => expect(calls.some((c) => c.path === "/api/repairs/5/apply")).toBe(true));
     expect(calls.find((c) => c.path === "/api/repairs/5/apply")?.body).toEqual({
-      confirm: true, diff_sha256: "d".repeat(64), acknowledge_test_status: "failed",
+      // hash of the displayed diff, not the (deliberately wrong) validation.diff_sha256 from the API
+      confirm: true, diff_sha256: "d2332a5448099808d617f8850d5b030ebceed3ddd694a037e4081a02e530e557", acknowledge_test_status: "failed",
     });
   });
 });
@@ -249,7 +250,6 @@ describe("SettingsPage", () => {
 
 describe("JobPanel", () => {
   it("streams the log, cancels, and reports completion once", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     let status = "running";
     const onDone = vi.fn();
     const { calls } = mockApi({
@@ -260,10 +260,26 @@ describe("JobPanel", () => {
     renderAt(<JobPanel jobId="j1" onDone={onDone} />);
     expect(await screen.findByText(/第一行/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "取消任務" }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1), { timeout: 3000 });
     expect(screen.getByText("已取消")).toBeInTheDocument();
-    expect(calls.filter((c) => c.path === "/api/jobs/j1/log" && c.url.searchParams.get("offset") === "10").length).toBeGreaterThan(0);
-    vi.useRealTimers();
+    expect(calls.some((c) => c.path === "/api/jobs/j1/log" && c.url.searchParams.get("offset") === "10")).toBe(true);
+  });
+
+  it("stops polling on 4xx (job deleted)", async () => {
+    const { fetchMock } = mockApi({ "GET /api/jobs/gone": () => reply(404, { detail: "任務不存在" }) });
+    renderAt(<JobPanel jobId="gone" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("已停止更新");
+    const n = fetchMock.mock.calls.length;
+    await act(async () => { await new Promise((r) => setTimeout(r, 2500)); });
+    expect(fetchMock.mock.calls.length).toBe(n);
+  });
+
+  it("backs off on 5xx instead of hammering the server", async () => {
+    const { fetchMock } = mockApi({ "GET /api/jobs/busy": () => reply(503, { detail: "資料庫忙碌中" }) });
+    renderAt(<JobPanel jobId="busy" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("重試");
+    await act(async () => { await new Promise((r) => setTimeout(r, 3500)); });
+    // 1s then 2s back-off: at most 3 requests in 3.5s (fixed 1s polling would make ~4).
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(3);
   });
 });

@@ -1,58 +1,100 @@
 import { useEffect, useRef, useState } from "react";
-import { api, qs } from "../api";
-import { useAction, useInterval } from "../hooks";
+import { api, ApiError, qs } from "../api";
+import { useAction } from "../hooks";
 import { label } from "../labels";
 import type { Job } from "../types";
 import { ErrorBox, Progress, StatusBadge } from "./common";
 
 const ACTIVE = ["queued", "running"];
+const BASE_DELAY = 1000;
+const MAX_DELAY = 10_000;
 
 /** Live view of one background job: status, progress, streaming log and cancel. State comes from
- * the backend, so a page refresh simply re-attaches to the same job. */
+ * the backend, so a page refresh simply re-attaches to the same job (the log is re-read from 0).
+ * Polling pauses while the tab is hidden, stops on 4xx (e.g. the job was deleted) and backs off
+ * exponentially on 5xx / network errors. */
 export function JobPanel({ jobId, onDone, showLog = true }: { jobId: string; onDone?: (job: Job) => void; showLog?: boolean }) {
   const [job, setJob] = useState<Job>();
   const [log, setLog] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [stopped, setStopped] = useState(false);
   const offset = useRef(0);
   const doneFired = useRef(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   const cancel = useAction();
-  const active = !job || ACTIVE.includes(job.status);
+  const [kick, setKick] = useState(0);
+  const active = !stopped && (!job || ACTIVE.includes(job.status));
 
   useEffect(() => {
     offset.current = 0;
     doneFired.current = false;
     setLog("");
     setJob(undefined);
+    setStopped(false);
+    setError(null);
   }, [jobId]);
 
-  const poll = async () => {
-    try {
+  useEffect(() => {
+    let alive = true;
+    let timer: number | undefined;
+    let delay = BASE_DELAY;
+
+    const poll = async (): Promise<boolean> => {
       const j = await api.get<Job>(`/jobs/${jobId}`);
+      if (!alive) return false;
       setJob(j);
       if (showLog) {
-        const chunk = await api.get<{ text: string; next_offset: number }>(
-          `/jobs/${jobId}/log${qs({ offset: offset.current })}`);
-        if (chunk.text) {
+        // Drain the log: several chunks may be pending after a refresh.
+        for (let i = 0; i < 20; i++) {
+          const chunk = await api.get<{ text: string; next_offset: number }>(
+            `/jobs/${jobId}/log${qs({ offset: offset.current })}`);
+          if (!alive || !chunk.text) break;
           offset.current = chunk.next_offset;
           setLog((prev) => (prev + chunk.text).slice(-200_000));
         }
       }
       setError(null);
-      if (!ACTIVE.includes(j.status) && !doneFired.current) {
-        doneFired.current = true;
-        onDone?.(j);
+      if (!ACTIVE.includes(j.status)) {
+        if (!doneFired.current) {
+          doneFired.current = true;
+          onDoneRef.current?.(j);
+        }
+        return false;
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
+      return true;
+    };
 
-  const pollRef = useRef(poll);
-  pollRef.current = poll;
-  useEffect(() => {
-    void pollRef.current();
-  }, [jobId]);
-  useInterval(() => void poll(), active ? 1000 : null);
+    const tick = async () => {
+      if (!alive) return;
+      if (document.visibilityState === "hidden") {
+        timer = window.setTimeout(tick, BASE_DELAY);
+        return;
+      }
+      try {
+        const again = await poll();
+        delay = BASE_DELAY;
+        if (again && alive) timer = window.setTimeout(tick, delay);
+      } catch (e) {
+        if (!alive) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+          setError(`${msg}（已停止更新）`);
+          setStopped(true);
+          return;
+        }
+        setError(`${msg}（${Math.round(delay / 1000)} 秒後重試）`);
+        timer = window.setTimeout(tick, delay);
+        delay = Math.min(delay * 2, MAX_DELAY);
+      }
+    };
+
+    void tick();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [jobId, showLog, kick]);
 
   return (
     <div className="panel" data-testid="job-panel">
@@ -63,7 +105,7 @@ export function JobPanel({ jobId, onDone, showLog = true }: { jobId: string; onD
         <span className="spacer" />
         {active && (
           <button className="danger" disabled={cancel.busy || job?.cancel_requested}
-            onClick={() => cancel.run(() => api.post(`/jobs/${jobId}/cancel`)).then(() => poll())}>
+            onClick={() => cancel.run(() => api.post(`/jobs/${jobId}/cancel`)).then(() => setKick((k) => k + 1))}>
             {job?.cancel_requested ? "取消中…" : "取消任務"}
           </button>
         )}

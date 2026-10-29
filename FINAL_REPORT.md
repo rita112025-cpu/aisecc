@@ -9,6 +9,7 @@
 瀏覽器（React 18 + TS，繁中 9 頁）
    │  /api（只接受 Host=127.0.0.1/localhost；拒絕跨站 Origin 寫入）
 FastAPI（uvicorn，127.0.0.1，單一 worker）
+   ├─ 安全標頭：CSP（frame-ancestors 'none'、script-src 'self'）、X-Frame-Options DENY、nosniff；HTML 報告另加 sandbox CSP
    ├─ API：projects / scans / findings / test-commands / test-runs / repairs / jobs / settings / system
    ├─ JobManager：ThreadPool + SQLite 狀態（進度、日誌、取消、去重、重啟恢復、孤兒程序清理）
    ├─ procs.run_command：無 shell、逾時、取消、程序樹終止、記憶體上限、低優先權、輸出遮罩
@@ -108,10 +109,10 @@ start.ps1 → health → 重複啟動 → stop.ps1   # 在使用者終端（沙�
 
 | 類別 | PASS | FAIL | SKIP | BLOCKED |
 |---|---|---|---|---|
-| 後端 pytest | 254 | 0 | 0 | 0 |
-| 前端 Vitest | 19 | 0 | 0 | 0 |
+| 後端 pytest | 270 | 0 | 0 | 0 |
+| 前端 Vitest | 21 | 0 | 0 | 0 |
 | Playwright E2E（真實後端） | 4 | 0 | 0 | 0 |
-| **合計自動化測試** | **277** | **0** | **0** | — |
+| **合計自動化測試** | **295** | **0** | **0** | — |
 | 靜態檢查（ruff、tsc） | 2 | 0 | 0 | — |
 | 功能項目 BLOCKED（見第 7 節） | — | — | — | 3 |
 
@@ -135,7 +136,8 @@ start.ps1 → health → 重複啟動 → stop.ps1   # 在使用者終端（沙�
 3. 孤兒工作區清理同時參考 DB 狀態和 mtime（超過 1 天）；產生時間超過 1 天的修復任務屬於理論上的邊界情況。
 4. SQLite 的單一寫入者特性限制了同時執行的任務數（預設 2 個 worker），不適合多人同時操作。
 5. JS/TS 的複雜度與循環依賴分析是啟發式，不是完整的語法剖析。
-6. 測試指令一旦批准，就會在使用者權限下執行專案程式碼。這是需求要求的「已授權操作」，系統只能限制環境變數、時間與記憶體，無法沙盒化程式本身。
+6. Vite 鎖定在 5.4.11（使用者核准的版本），此版本的 **dev server** 有已知漏洞（5.4.12～5.4.19 陸續修補；只影響 `npm run dev`，不影響 start.ps1 提供的建置檔）。升級需使用者同意，已提出。
+7. 測試指令一旦批准，就會在使用者權限下執行專案程式碼。這是需求要求的「已授權操作」，系統只能限制環境變數、時間與記憶體，無法沙盒化程式本身。
 
 ## 9. Windows 安裝方式
 
@@ -181,7 +183,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 - [x] Git 原始資料受到保護（只讀指令、私有 index、不 commit；有測試驗證）
 - [x] SQLite 持久化正常（含重啟後任務狀態）
 - [x] 前後端 API 完整連通（E2E 使用真實後端）
-- [x] 至少 100 個有意義的測試案例（277 個）
+- [x] 至少 100 個有意義的測試案例（295 個）
 - [x] 已執行測試沒有未處理的失敗
 - [x] 所有略過測試均有記錄（0 skip；BLOCKED／PARTIAL 項目列於第 7 節）
 - [x] 沒有硬編碼密碼（金鑰只從環境變數讀取；本專案自掃結果中的敏感資訊命中皆為測試資料）

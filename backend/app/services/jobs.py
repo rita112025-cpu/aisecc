@@ -252,5 +252,31 @@ def read_log(log_path: str | None, offset: int = 0, limit: int = 200_000) -> tup
         return "", 0
     with p.open("rb") as fh:
         fh.seek(max(0, offset))
-        data = fh.read(limit)
+        data = fh.read(max(1, limit))
+        if len(data) == max(1, limit):
+            # Never split a multi-byte UTF-8 character across chunks: stop at the last complete one,
+            # reading up to 3 more bytes when the chunk is smaller than a single character.
+            data += fh.read(3)
+            cut = _utf8_boundary(data, max(1, limit))
+            data = data[:cut]
     return data.decode("utf-8", errors="replace"), max(0, offset) + len(data)
+
+
+def _utf8_boundary(data: bytes, wanted: int) -> int:
+    """Largest index <= max(wanted, first char end) that does not cut a UTF-8 sequence."""
+    def char_len(b: int) -> int:
+        return 1 if b < 0x80 else 2 if b >> 5 == 0b110 else 3 if b >> 4 == 0b1110 else 4 if b >> 3 == 0b11110 else 1
+
+    i = 0
+    last_ok = 0
+    while i < len(data):
+        n = char_len(data[i])
+        if i + n > len(data):
+            break
+        if i + n > wanted and last_ok > 0:
+            break
+        i += n
+        last_ok = i
+        if i >= wanted:
+            break
+    return last_ok or len(data)

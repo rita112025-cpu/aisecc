@@ -33,6 +33,13 @@ const PAGES: [string, string][] = [
 ];
 
 test("all nine pages render from the real API without errors", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+  page.on("pageerror", (e) => consoleErrors.push(e.message));
+  const first = await page.goto("/");
+  // The app is served with a strict CSP and anti-framing headers; nothing may violate them.
+  expect(first?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");
+  expect(first?.headers()["x-frame-options"]).toBe("DENY");
   for (const [url, title] of PAGES) {
     await page.goto(url);
     await expect(page.getByRole("heading", { level: 2, name: title })).toBeVisible();
@@ -41,6 +48,7 @@ test("all nine pages render from the real API without errors", async ({ page }) 
   }
   await page.getByRole("link", { name: "專案管理" }).click();
   await expect(page).toHaveURL(/\/projects$/);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("project → inventory → analysis → triage", async ({ page }) => {
