@@ -180,8 +180,9 @@ def apply_retention(settings: Settings, now: datetime | None = None, dry_run: bo
         for prefix in PROTECTED_AUDIT_PREFIXES:
             audit_q = audit_q.filter(~AuditLog.action.startswith(prefix))
         old_audit = [aid for (aid,) in audit_q]
+        # generating proposals own their workspace too (mtime alone is unreliable after a clone).
         keep_ws = _norm_paths(p.workspace_path for p in s.query(RepairProposal).filter(
-            RepairProposal.status == "validated"))
+            RepairProposal.status.in_(("validated", "generating"))))
     orphan_ws = [d for d in settings.workspaces_dir.glob("repair-*")
                  if _norm(d) not in keep_ws and d.stat().st_mtime < (now - timedelta(days=1)).replace(
                      tzinfo=UTC).timestamp()] if settings.workspaces_dir.is_dir() else []

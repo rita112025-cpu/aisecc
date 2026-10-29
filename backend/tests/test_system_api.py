@@ -177,3 +177,21 @@ def test_audit_log_filters(client: TestClient, tmp_path: Path) -> None:  # noqa:
     page = client.get("/api/audit-logs", params={"project_id": pid}).json()
     assert page["total"] >= 1 and all(i["project_id"] == pid for i in page["items"])
     assert client.get("/api/audit-logs", params={"q": "project.add"}).json()["total"] >= 1
+
+
+def test_retention_keeps_generating_workspace(db: Path, settings: Settings, tmp_path: Path) -> None:
+    import os
+
+    from app.models import RepairProposal
+
+    ws = settings.workspaces_dir / "repair-8"
+    ws.mkdir(parents=True)
+    three_days = (datetime.now(UTC) - timedelta(days=3)).timestamp()
+    os.utime(ws, (three_days, three_days))
+    with write_session() as s:
+        p = Project(name="p", path=str(tmp_path), path_key="p")
+        s.add(p)
+        s.flush()
+        s.add(RepairProposal(project_id=p.id, provider="x", status="generating", workspace_path=str(ws)))
+    apply_retention(settings)
+    assert ws.is_dir()

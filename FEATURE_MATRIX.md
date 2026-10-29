@@ -16,6 +16,29 @@
 | ruff, bandit, pip-audit, pytest-cov, pytest-timeout | 分析工具（dev） | 已安裝，**請確認** |
 | ~~chardet~~ | 依審查意見移除，改用 utf-8 → utf-8-sig → utf-16 BOM → cp950 → latin-1 | 已移除 |
 
+### 前端（Phase 6）— 尚未安裝，**待使用者核准**
+需求指定 React + TypeScript + Vite + Vitest + Playwright。以下為最小集合，固定版本，安裝於 `frontend/node_modules`（不使用全域安裝）。
+
+| 套件 | 版本 | 類型 | 用途 |
+|---|---|---|---|
+| react | 18.3.1 | 執行期 | UI |
+| react-dom | 18.3.1 | 執行期 | UI |
+| react-router-dom | 6.28.0 | 執行期 | 9 個頁面路由 |
+| vite | 5.4.11 | 開發 | 開發伺服器與建置 |
+| @vitejs/plugin-react | 4.3.4 | 開發 | Vite React 支援 |
+| typescript | 5.6.3 | 開發 | 型別檢查 |
+| @types/react | 18.3.12 | 開發 | 型別 |
+| @types/react-dom | 18.3.1 | 開發 | 型別 |
+| vitest | 2.1.8 | 開發 | 前端單元／元件測試 |
+| jsdom | 25.0.1 | 開發 | Vitest 的 DOM 環境 |
+| @testing-library/react | 16.1.0 | 開發 | 元件互動測試 |
+| @testing-library/user-event | 14.5.2 | 開發 | 模擬使用者操作 |
+| @testing-library/jest-dom | 6.6.3 | 開發 | DOM 斷言 |
+| @playwright/test | 1.49.1 | 開發 | E2E |
+| Playwright Chromium 瀏覽器 | 隨 1.49.1 | 下載（約 150MB，存於使用者快取） | E2E 執行 |
+
+不使用 UI 框架（原生 CSS）。若不核准 Playwright：E2E 記為 BLOCKED，改以 Vitest + 後端 API 測試替代驗證。
+
 ## Phase 1：盤點
 | 項目 | 狀態 | 說明 |
 |---|---|---|
