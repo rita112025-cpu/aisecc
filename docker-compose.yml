@@ -1,0 +1,15 @@
+# Optional. Primary deployment is Windows-native (install.ps1 / start.ps1). Not verified here
+# (Docker is not installed on the development machine). Projects to analyse must be mounted
+# under /projects and added in the UI with their container path, e.g. /projects/my-app.
+services:
+  aisecc:
+    build: .
+    ports:
+      - "127.0.0.1:8765:8765"   # host loopback only
+    volumes:
+      - aisecc-data:/data
+      - ${AISECC_PROJECTS_DIR:-./projects}:/projects:ro
+    restart: unless-stopped
+
+volumes:
+  aisecc-data:

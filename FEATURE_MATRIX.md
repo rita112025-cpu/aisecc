@@ -143,11 +143,23 @@
 | 桌面解析度 | DONE | 固定側欄 + 流式主內容（未做行動版） |
 | E2E 規格檔型別檢查 | PARTIAL | 由 Playwright 轉譯執行並通過；`tsc` 需 `@types/node`（未核准），故 tsconfig 只涵蓋 `src` |
 
-## Phase 7–8
-| 模組 | 狀態 |
-|---|---|
-| E Web 介面 | TODO |
-| Windows 部署腳本與文件 | TODO |
+## Phase 7：整合測試與回歸
+| 項目 | 狀態 | 驗證 |
+|---|---|---|
+| 全部自動化測試一鍵執行並輸出摘要 | DONE | `run_tests.ps1`：pytest 254、ruff、tsc、vitest 19、build、playwright 4 全部 PASS |
+| 略過項目記錄 | DONE | pytest `-rs` 0 skipped；`-SkipE2E` 時摘要明確標示 SKIPPED，不算通過 |
+
+## Phase 8：Windows 部署與文件
+| 項目 | 狀態 | 驗證 |
+|---|---|---|
+| install.ps1（檢查 Python 3.12／Node／git、venv、套件、建置、Chromium、初始化 DB；可讀錯誤訊息） | DONE | 實際執行 exit 0；過程中抓到並修正一個錯誤留下的空 `tsconfig.json` |
+| start.ps1（只綁 127.0.0.1、單一 worker、健康檢查、開瀏覽器、重複啟動偵測、連接埠占用提示） | DONE | 在使用者終端（沙盒外）實測：啟動後 5 秒仍在監聽、health OK、只監聽 127.0.0.1、重複啟動顯示「已在執行中」 |
+| stop.ps1（只停止本系統程序、連同子程序、PID 重用保護） | DONE | 實測停止後連接埠釋放、無殘留程序 |
+| run_tests.ps1 | DONE | 見 Phase 7 |
+| 不需系統管理員、不需 WSL、不變更安全設定 | DONE | 全程一般使用者；執行原則只用 `-ExecutionPolicy Bypass` 單次參數 |
+| 腳本中文訊息（UTF-8 BOM，PowerShell 5.1 相容） | DONE | 實際輸出中文正常 |
+| README／DEPLOYMENT／TROUBLESHOOTING | DONE | |
+| Docker Compose（選用） | BLOCKED | 本機未安裝 Docker；已提供 Dockerfile 與 docker-compose.yml（主機只開放 127.0.0.1），未驗證 |
 
 ## 測試執行紀錄
 | 日期 | 指令 | 結果 |
