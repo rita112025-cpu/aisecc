@@ -16,7 +16,7 @@
 | ruff, bandit, pip-audit, pytest-cov, pytest-timeout | 分析工具（dev） | 已安裝，**請確認** |
 | ~~chardet~~ | 依審查意見移除，改用 utf-8 → utf-8-sig → utf-16 BOM → cp950 → latin-1 | 已移除 |
 
-### 前端（Phase 6）— 尚未安裝，**待使用者核准**
+### 前端（Phase 6）— 已核准（使用者於實作 session 回覆「Approve all」，2026-10-29）
 需求指定 React + TypeScript + Vite + Vitest + Playwright。以下為最小集合，固定版本，安裝於 `frontend/node_modules`（不使用全域安裝）。
 
 | 套件 | 版本 | 類型 | 用途 |
@@ -130,7 +130,20 @@
 | 重啟恢復（Job、TestRun、Scan、RepairProposal） | DONE | `test_recover_*` |
 | Dashboard、稽核紀錄、工具狀態 API | DONE | `test_dashboard_and_tools`、`test_audit_log_filters` |
 
-## Phase 6–8
+## Phase 6：模組 E Web 介面
+| 項目 | 狀態 | 測試 |
+|---|---|---|
+| 9 頁繁中介面（總覽、專案、掃描、安全、測試、AI 修復、Git 比較、歷史、設定），全部串接後端 API，無假資料 | DONE | E2E `all nine pages render from the real API without errors` |
+| Loading／Empty／Error 狀態與重試 | DONE | Vitest `DashboardPage`、`ProjectsPage` |
+| 搜尋、過濾、排序、分頁（findings 由後端處理） | DONE | Vitest `ScansPage`、`ProjectsPage` |
+| 長時間任務：進度、即時日誌、取消；重新整理後重新接上進行中的任務 | DONE | E2E `test center: … refresh re-attaches … cancel`、Vitest `JobPanel` |
+| 測試指令批准（帶內容雜湊）、AI 套用需確認 diff 與測試狀態 | DONE | Vitest `TestsPage`、`RepairsPage` |
+| 掃描 → 判定誤報，機密不以明文顯示 | DONE | E2E `project → inventory → analysis → triage` |
+| 保存期限先試算再確認、備份 | DONE | Vitest `SettingsPage`、E2E `settings backup` |
+| 桌面解析度 | DONE | 固定側欄 + 流式主內容（未做行動版） |
+| E2E 規格檔型別檢查 | PARTIAL | 由 Playwright 轉譯執行並通過；`tsc` 需 `@types/node`（未核准），故 tsconfig 只涵蓋 `src` |
+
+## Phase 7–8
 | 模組 | 狀態 |
 |---|---|
 | E Web 介面 | TODO |
@@ -149,3 +162,6 @@
 | 2026-10-28 | 同上 `-rs` | 216 passed（Phase 5 模組 D） |
 | 2026-10-29 | 同上 `-rs` | 248 passed，0 skipped（審查累積修正＋系統 API） |
 | 2026-10-29 | `..\.venv\Scripts\ruff.exe check .` | All checks passed |
+| 2026-10-29 | `cd frontend; npx vitest run` | 19 passed |
+| 2026-10-29 | `cd frontend; npx tsc --noEmit -p .` | 0 errors |
+| 2026-10-29 | `cd frontend; npx vite build; npx playwright test` | 4 passed（真實後端、暫存資料目錄、port 8799） |
