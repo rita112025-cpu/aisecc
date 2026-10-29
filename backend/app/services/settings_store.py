@@ -14,6 +14,8 @@ from app.models import Setting
 
 class AppSettings(BaseModel):
     retention_days: int = Field(default=90, ge=1, le=3650)
+    # Non-protected audit entries only; approvals/changes are always kept.
+    audit_retention_days: int = Field(default=730, ge=365, le=36500)
     ai_provider: str = Field(default="none", pattern="^(none|ollama|openai_compatible)$")
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""

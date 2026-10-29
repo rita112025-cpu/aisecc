@@ -28,6 +28,11 @@ class RestoreIn(BaseModel):
     confirm: Literal[True]
 
 
+class RetentionIn(BaseModel):
+    confirm: Literal[True]
+    dry_run: bool = False
+
+
 class AuditOut(ORMModel):
     id: int
     created_at: datetime
@@ -80,8 +85,9 @@ def restore(body: RestoreIn, request: Request) -> dict[str, Any]:
 
 
 @router.post("/system/retention")
-def run_retention(request: Request) -> dict[str, int]:
-    return apply_retention(request.app.state.settings)
+def run_retention(body: RetentionIn, request: Request) -> dict[str, Any]:
+    counts = apply_retention(request.app.state.settings, dry_run=body.dry_run)
+    return {"dry_run": body.dry_run, **counts}
 
 
 @router.get("/audit-logs")

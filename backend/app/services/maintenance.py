@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sqlite3
@@ -71,6 +72,8 @@ def _validate_backup(path: Path) -> None:
 
 
 def restore_db(settings: Settings, name: str) -> dict[str, Any]:
+    """Stage the backup next to the live DB, validate and migrate the staged copy, and only then
+    swap it in with os.replace. Any failure leaves the live database untouched."""
     if not BACKUP_NAME.match(name):
         raise MaintenanceError("備份檔名不合法")
     src = settings.backups_dir / name
@@ -81,17 +84,32 @@ def restore_db(settings: Settings, name: str) -> dict[str, Any]:
         if s.query(Job).filter(Job.status.in_(ACTIVE_STATUSES)).count():
             raise MaintenanceError("有任務正在執行，請等待完成或取消後再還原")
     safety = backup_db(settings, "-pre-restore")
+    staged = settings.db_path.with_suffix(".restoring")
+    try:
+        shutil.copy2(src, staged)
+        _validate_backup(staged)
+        upgrade_db(staged)
+    except Exception as exc:  # noqa: BLE001 - any staging failure must leave the live DB intact
+        _cleanup_staged(staged)
+        raise MaintenanceError(f"還原失敗，原資料庫未變更：{exc}") from exc
     with WRITE_LOCK:
         dispose_engine()
         try:
             for ext in ("-wal", "-shm"):
                 Path(f"{settings.db_path}{ext}").unlink(missing_ok=True)
-            shutil.copy2(src, settings.db_path)
-            upgrade_db(settings.db_path)
+            os.replace(staged, settings.db_path)
+        except OSError as exc:
+            _cleanup_staged(staged)
+            raise MaintenanceError(f"還原失敗，原資料庫未變更：{exc}") from exc
         finally:
             init_engine(settings.db_path)
     audit.record("system.restore", detail={"from": name, "safety_backup": safety["name"]})
     return {"restored": name, "safety_backup": safety["name"]}
+
+
+def _cleanup_staged(staged: Path) -> None:
+    for p in (staged, Path(f"{staged}-wal"), Path(f"{staged}-shm")):
+        p.unlink(missing_ok=True)
 
 
 def recover_records(settings: Settings) -> dict[str, int]:
@@ -124,47 +142,55 @@ def recover_records(settings: Settings) -> dict[str, int]:
     return counts
 
 
-def apply_retention(settings: Settings, now: datetime | None = None) -> dict[str, int]:
+# Audit records of approvals and changes are kept regardless of age (requirement: keep execution
+# records). Other audit entries follow audit_retention_days (minimum one year).
+PROTECTED_AUDIT_PREFIXES = ("repair.", "test_command.", "project.", "settings.", "system.")
+
+
+def apply_retention(settings: Settings, now: datetime | None = None, dry_run: bool = False) -> dict[str, int]:
     """Delete finished records older than `retention_days`, with their log and report files.
-    Projects, findings of the latest scan per project and applied repairs' backups are kept."""
-    days = load_settings().retention_days
-    cutoff = (now or datetime.now(UTC)) - timedelta(days=days)
-    cutoff = cutoff.replace(tzinfo=None)  # SQLite stores naive UTC
-    counts = {"jobs": 0, "scans": 0, "test_runs": 0, "repairs": 0, "audit_logs": 0, "files": 0}
+    Projects, the latest scan per project and kind, and protected audit records are kept.
+    With dry_run=True nothing is changed and the counts of what would be deleted are returned."""
+    cfg = load_settings()
+    now = (now or datetime.now(UTC)).replace(tzinfo=None)  # SQLite stores naive UTC
+    cutoff = now - timedelta(days=cfg.retention_days)
+    audit_cutoff = now - timedelta(days=cfg.audit_retention_days)
     with read_session() as s:
         latest_scans = {sid for (sid,) in s.query(func.max(Scan.id)).group_by(Scan.project_id, Scan.kind)}
         old_jobs = [(j.id, j.log_path) for j in s.query(Job).filter(
             Job.created_at < cutoff, Job.status.notin_(ACTIVE_STATUSES))]
-        old_scans = [sid for (sid,) in s.query(Scan.id).filter(Scan.created_at < cutoff)
+        old_scans = [sid for (sid,) in s.query(Scan.id).filter(Scan.created_at < cutoff, Scan.status != "running")
                      if sid not in latest_scans]
         old_runs = [rid for (rid,) in s.query(TestRun.id).filter(TestRun.created_at < cutoff,
                                                                  TestRun.status != "running")]
-    for sid in old_scans:
-        for ext in ("json", "html"):
-            p = settings.reports_dir / f"scan-{sid}.{ext}"
-            if p.is_file():
-                p.unlink()
-                counts["files"] += 1
-    for rid in old_runs:
-        d = settings.reports_dir / "tests" / str(rid)
-        if d.is_dir():
-            workspace.safe_rmtree(d, settings.reports_dir)
-            counts["files"] += 1
-    for _, log_path in old_jobs:
-        if log_path and Path(log_path).is_file() and settings.logs_dir in Path(log_path).parents:
-            Path(log_path).unlink()
-            counts["files"] += 1
+        old_repairs = [rid for (rid,) in s.query(RepairProposal.id).filter(
+            RepairProposal.created_at < cutoff, RepairProposal.status.in_(("rejected", "invalid", "failed")))]
+        audit_q = s.query(AuditLog.id).filter(AuditLog.created_at < audit_cutoff)
+        for prefix in PROTECTED_AUDIT_PREFIXES:
+            audit_q = audit_q.filter(~AuditLog.action.startswith(prefix))
+        old_audit = [aid for (aid,) in audit_q]
+        keep_ws = {p.workspace_path for p in s.query(RepairProposal).filter(RepairProposal.status == "validated")}
+    orphan_ws = [d for d in settings.workspaces_dir.glob("repair-*")
+                 if str(d) not in keep_ws and d.stat().st_mtime < (now - timedelta(days=1)).replace(
+                     tzinfo=UTC).timestamp()] if settings.workspaces_dir.is_dir() else []
+    files = [settings.reports_dir / f"scan-{sid}.{ext}" for sid in old_scans for ext in ("json", "html")]
+    files += [Path(lp) for _, lp in old_jobs if lp and settings.logs_dir in Path(lp).parents]
+    files = [f for f in files if f.is_file()]
+    dirs = [d for d in (settings.reports_dir / "tests" / str(rid) for rid in old_runs) if d.is_dir()] + orphan_ws
+    counts = {"jobs": len(old_jobs), "scans": len(old_scans), "test_runs": len(old_runs),
+              "repairs": len(old_repairs), "audit_logs": len(old_audit), "files": len(files) + len(dirs)}
+    if dry_run:
+        return counts
+    for f in files:
+        f.unlink(missing_ok=True)
+    for d in dirs:
+        # Directory contents may be written by project code (test reports): never follow links.
+        workspace.safe_rmtree(d, settings.data_dir)
     with write_session() as s:
-        counts["scans"] = s.query(Scan).filter(Scan.id.in_(old_scans)).delete(synchronize_session=False) \
-            if old_scans else 0
-        counts["test_runs"] = s.query(TestRun).filter(TestRun.id.in_(old_runs)).delete(synchronize_session=False) \
-            if old_runs else 0
-        counts["repairs"] = s.query(RepairProposal).filter(
-            RepairProposal.created_at < cutoff, RepairProposal.status.in_(("rejected", "invalid", "failed"))
-        ).delete(synchronize_session=False)
-        counts["jobs"] = s.query(Job).filter(Job.id.in_([j for j, _ in old_jobs])).delete(
-            synchronize_session=False) if old_jobs else 0
-        counts["audit_logs"] = s.query(AuditLog).filter(AuditLog.created_at < cutoff).delete(
-            synchronize_session=False)
-        audit.record("system.retention", detail={"days": days, **counts}, session=s)
+        for model, ids in ((Scan, old_scans), (TestRun, old_runs), (RepairProposal, old_repairs),
+                           (Job, [j for j, _ in old_jobs]), (AuditLog, old_audit)):
+            for start in range(0, len(ids), 500):
+                s.query(model).filter(model.id.in_(ids[start:start + 500])).delete(synchronize_session=False)
+        audit.record("system.retention", detail={"days": cfg.retention_days,
+                                                 "audit_days": cfg.audit_retention_days, **counts}, session=s)
     return counts
