@@ -46,6 +46,8 @@ class RunOptions:
     on_output: Callable[[str], None] | None = None
     # Called with (pid, create_time) right after spawn so callers can persist it for orphan cleanup.
     on_start: Callable[[int, float], None] | None = None
+    # Applied to every output line before it is logged or captured (secret masking).
+    redact: Callable[[str], str] | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -171,6 +173,8 @@ def run_command(argv: Sequence[str], opts: RunOptions) -> ProcResult:
         assert proc.stdout is not None
         for raw in iter(proc.stdout.readline, b""):
             text = _decode(raw)
+            if opts.redact is not None:
+                text = opts.redact(text)
             with lock:
                 if captured < opts.capture_limit:
                     chunks.append(text)

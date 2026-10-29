@@ -14,7 +14,7 @@ from app.services import audit
 from app.services.detect import detect
 from app.services.fswalk import resolve_inside, walk
 from app.services.jobs import JobManager
-from app.services.testing.commands import FRAMEWORKS, KEY_PATTERN, command_hash, suggest_commands
+from app.services.testing.commands import ENV_NAME, FRAMEWORKS, KEY_PATTERN, command_hash, suggest_commands
 from app.services.testing.failures import compare_runs
 from app.services.testing.runner import CommandNotApproved, approved_command, run_tests
 
@@ -30,6 +30,8 @@ class CommandOut(ORMModel):
     cwd: str
     timeout_sec: int
     max_memory_mb: int
+    extra_env_names: list[str]
+    inherit_full_env: bool
     approved: bool
     approved_at: datetime | None
     source: str
@@ -43,6 +45,16 @@ class CommandIn(BaseModel):
     cwd: str = "."
     timeout_sec: int = Field(600, ge=5, le=4 * 3600)
     max_memory_mb: int = Field(2048, ge=128, le=65536)
+    extra_env_names: list[str] = Field(default_factory=list, max_length=50)
+    inherit_full_env: bool = False
+
+    @field_validator("extra_env_names")
+    @classmethod
+    def _env_names(cls, v: list[str]) -> list[str]:
+        bad = [n for n in v if not ENV_NAME.match(n) or n.upper().startswith("AISECC_")]
+        if bad:
+            raise ValueError(f"不合法的環境變數名稱：{bad}")
+        return sorted({n.upper() for n in v})
 
     @field_validator("framework")
     @classmethod
@@ -107,7 +119,7 @@ class TestResultOut(ORMModel):
 
 def _cmd_out(c: TestCommand) -> CommandOut:
     out = CommandOut.model_validate(c)
-    out.content_hash = command_hash(c.framework, c.argv, c.cwd, c.timeout_sec, c.max_memory_mb)
+    out.content_hash = command_hash(c)
     out.approved = c.approved and c.approved_hash == out.content_hash
     return out
 
@@ -137,7 +149,7 @@ def detect_commands(project_id: int, db: Session = Depends(get_db)) -> list[Comm
             if spec.key not in existing:
                 s.add(TestCommand(project_id=project_id, key=spec.key, framework=spec.framework, argv=spec.argv,
                                   cwd=spec.cwd, timeout_sec=spec.timeout_sec, max_memory_mb=spec.max_memory_mb,
-                                  approved=False, source="detected"))
+                                  extra_env_names=[], inherit_full_env=False, approved=False, source="detected"))
         audit.record("test_command.detect", target_type="project", target_id=project_id, project_id=project_id,
                      detail={"suggested": [s_.key for s_ in specs]}, session=s)
     db.rollback()
@@ -162,6 +174,7 @@ def upsert_command(project_id: int, key: str, body: CommandIn, db: Session = Dep
             s.add(c)
         c.framework, c.argv, c.cwd = body.framework, body.argv, body.cwd or "."
         c.timeout_sec, c.max_memory_mb = body.timeout_sec, body.max_memory_mb
+        c.extra_env_names, c.inherit_full_env = body.extra_env_names, body.inherit_full_env
         # Any edit invalidates a previous approval.
         c.approved, c.approved_hash, c.approved_at = False, None, None
         c.updated_at = utcnow()
@@ -174,7 +187,7 @@ def upsert_command(project_id: int, key: str, body: CommandIn, db: Session = Dep
 @router.post("/projects/{project_id}/test-commands/{key}/approve", response_model=CommandOut)
 def approve_command(project_id: int, key: str, body: ApproveIn, db: Session = Depends(get_db)) -> CommandOut:
     c = _get_cmd(db, project_id, key)
-    current = command_hash(c.framework, c.argv, c.cwd, c.timeout_sec, c.max_memory_mb)
+    current = command_hash(c)
     if body.content_hash != current:
         raise HTTPException(409, "指令內容已變更，請重新檢視後再批准")
     with write_session() as s:

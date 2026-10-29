@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 MAX_MESSAGE = 4000
-MAX_REPORT_BYTES = 200_000_000
+MAX_REPORT_BYTES = 50_000_000
 
 
 @dataclass

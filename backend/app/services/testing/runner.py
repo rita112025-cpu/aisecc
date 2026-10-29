@@ -12,11 +12,12 @@ from app.db import read_session, write_session
 from app.models import Project, TestCommand, TestResult, TestRun, utcnow
 from app.services import audit, gitinfo
 from app.services.ai import workspace as repair_workspace
+from app.services.analysis.secrets import redact
 from app.services.fswalk import resolve_inside
 from app.services.jobs import JobCancelled, JobContext, JobTimeout
 from app.services.procs import RunOptions, run_command
 from app.services.testing import failures, reports
-from app.services.testing.commands import command_hash, reporter_args, rerun_args
+from app.services.testing.commands import child_env, command_hash, reporter_args, rerun_args
 
 RESULT_BATCH = 500
 
@@ -30,18 +31,15 @@ def approved_command(project_id: int, key: str) -> TestCommand:
         cmd = s.query(TestCommand).filter_by(project_id=project_id, key=key).one_or_none()
         if cmd is None:
             raise ValueError(f"找不到測試指令：{key}")
-        current = command_hash(cmd.framework, cmd.argv, cmd.cwd, cmd.timeout_sec, cmd.max_memory_mb)
+        current = command_hash(cmd)
         if not cmd.approved or cmd.approved_hash != current:
             raise CommandNotApproved("測試指令尚未批准，或批准後已被修改；請重新審核")
         s.expunge(cmd)
         return cmd
 
 
-def _child_env(extra: dict[str, str]) -> dict[str, str]:
-    # Never hand our own secrets (AI keys etc.) to project code.
-    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("AISECC_")}
-    env.update(extra)
-    return env
+def _redact(text: str) -> str:
+    return redact(text, set())
 
 
 def _has_pytest_cov(root: Path) -> bool:
@@ -57,6 +55,11 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
     """Run an approved command. With `workspace`, the same command runs inside an isolated repair
     workspace (dependency folders junctioned in) instead of the real project."""
     cmd = approved_command(project_id, key)
+    if workspace is not None:
+        # Only the repair module passes a workspace; it must be one of ours.
+        ws_root = Path(os.path.realpath(get_settings().workspaces_dir))
+        if ws_root not in Path(os.path.realpath(workspace)).parents:
+            raise ValueError("工作區必須位於 data/workspaces 之下")
     with read_session() as s:
         project = s.get(Project, project_id)
         root = Path(project.path)
@@ -71,7 +74,7 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
             failed = [{"name": r.name, "classname": r.classname, "file": r.file}
                       for r in s.query(TestResult).filter(TestResult.run_id == rerun_of,
                                                           TestResult.status.in_(("failed", "error")))]
-        selection = rerun_args(cmd.framework, failed)
+        selection = rerun_args(cmd.framework, failed, workdir)
 
     branch = commit = None
     if gitinfo.is_git_repo(base_dir):
@@ -97,17 +100,21 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
     ctx.progress(0.05, "執行測試中")
     res = run_command(argv, RunOptions(
         cwd=workdir, timeout_sec=cmd.timeout_sec, max_memory_mb=cmd.max_memory_mb, log_path=ctx.log_path,
-        cancel_event=ctx.cancel_event, on_start=ctx.register_process, env=_child_env(extra_env),
+        cancel_event=ctx.cancel_event, on_start=ctx.register_process, redact=_redact,
+        env=child_env(list(cmd.extra_env_names or []), bool(cmd.inherit_full_env), extra_env),
     ))
     ctx.log(f"\n[結束] outcome={res.outcome} exit={res.exit_code} 耗時={res.duration_sec:.1f}s")
 
     parsed, parse_note = _collect_results(cmd.framework, out_dir)
     cov, cov_note = _collect_coverage(cmd.framework, out_dir, coverage)
     counts = parsed.counts() if parsed else {"total": 0, "passed": 0, "failed": 0, "skipped": 0, "errors": 0}
-    status = _run_status(res.outcome, res.exit_code, counts, parsed is not None)
+    if parsed:
+        for c in parsed.cases:
+            c.message = _redact(c.message) if c.message else c.message
+    status, status_note = _run_status(cmd.framework, res.outcome, res.exit_code, counts, parsed is not None)
     cases = [{"name": c.name, "status": c.status, "message": c.message} for c in (parsed.cases if parsed else [])]
     analysis = failures.analyse(cases)
-    notes = [n for n in (parse_note, cov_note, res.error) if n]
+    notes = [n for n in (status_note, parse_note, cov_note, res.error) if n]
 
     with write_session() as s:
         run = s.get(TestRun, run_id)
@@ -131,16 +138,22 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
     return {"test_run_id": run_id, "status": status, **counts}
 
 
-def _run_status(outcome: str, exit_code: int | None, counts: dict[str, int], parsed: bool) -> str:
-    if outcome in ("cancelled", "timeout", "memory_limit", "not_found", "error"):
-        return {"memory_limit": "error", "not_found": "error"}.get(outcome, outcome)
+def _run_status(framework: str, outcome: str, exit_code: int | None, counts: dict[str, int],
+                parsed: bool) -> tuple[str, str | None]:
+    """Status from exit code and report together; a missing report is never treated as success."""
+    if outcome in ("cancelled", "timeout"):
+        return outcome, None
+    if outcome in ("memory_limit", "not_found", "error"):
+        return "error", None
+    if framework == "pytest" and exit_code == 5:
+        return "no_tests", "pytest 沒有收集到任何測試（exit 5）"
     if not parsed:
-        return "error"  # no result file: never report success from an exit code alone
+        return "error", "未產生測試報告"
     if counts["failed"] or counts["errors"]:
-        return "failed"
+        return "failed", None
     if exit_code not in (0, None):
-        return "failed"
-    return "passed"
+        return "error", f"exit {exit_code}：測試皆通過但程序以非 0 結束（teardown／session fixture？）"
+    return "passed", None
 
 
 def _collect_results(framework: str, out_dir: Path) -> tuple[reports.ParsedResults | None, str | None]:

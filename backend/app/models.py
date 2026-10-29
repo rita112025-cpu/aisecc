@@ -167,6 +167,10 @@ class TestCommand(Base):
     cwd: Mapped[str] = mapped_column(String(1024), default=".")
     timeout_sec: Mapped[int] = mapped_column(Integer, default=600)
     max_memory_mb: Mapped[int] = mapped_column(Integer, default=2048)
+    # Environment: a minimal system allowlist plus these explicitly named variables, unless the
+    # user opts into inheriting everything. Both are part of the approval hash.
+    extra_env_names: Mapped[list[Any]] = mapped_column(JSON, default=list, server_default="[]")
+    inherit_full_env: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     approved: Mapped[bool] = mapped_column(Boolean, default=False)
     # sha256 of argv/cwd at approval time; any edit invalidates the approval.
     approved_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

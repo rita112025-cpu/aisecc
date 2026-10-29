@@ -6,6 +6,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from typing import Any
 
 from app.services.analysis.base import RawFinding, SourceIndex
 
@@ -69,6 +70,18 @@ def redact(text: str, values: set[str]) -> str:
     for rule in RULES:
         text = rule.pattern.sub(lambda m, r=rule: _mask_match(m, r), text)
     return text
+
+
+def redact_obj(obj: Any, values: set[str]) -> Any:
+    """Recursively redact strings (dict keys included) without a JSON round-trip, which would
+    hide quoted secrets behind escapes and corrupt backslashes."""
+    if isinstance(obj, str):
+        return redact(obj, values)
+    if isinstance(obj, dict):
+        return {redact_obj(k, values): redact_obj(v, values) for k, v in obj.items()}
+    if isinstance(obj, list | tuple):
+        return [redact_obj(v, values) for v in obj]
+    return obj
 
 
 def _mask_match(m: re.Match[str], rule: Rule) -> str:

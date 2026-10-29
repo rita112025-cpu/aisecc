@@ -19,4 +19,4 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "BLE"]
 ignore = ["S101", "S404", "S603", "S607", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S", "BLE"]
+"tests/*" = ["S", "BLE", "E501"]

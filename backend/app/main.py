@@ -16,7 +16,7 @@ from app.config import Settings, get_settings, set_active_settings
 from app.db import DatabaseBusyError, dispose_engine, init_engine
 from app.migrate import upgrade_db
 from app.services.jobs import DuplicateJobError, JobManager
-from app.services.maintenance import apply_retention
+from app.services.maintenance import apply_retention, recover_records
 
 log = logging.getLogger(__name__)
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
@@ -43,6 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         interrupted = manager.recover_after_restart()
         if interrupted:
             log.warning("marked %d stale jobs as interrupted", interrupted)
+        recover_records(settings)
         app.state.jobs = manager
         app.state.settings = settings
         try:

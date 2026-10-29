@@ -9,9 +9,9 @@
 | 套件 | 用途 | 狀態 |
 |---|---|---|
 | fastapi, uvicorn, sqlalchemy, alembic, pydantic, pydantic-settings, pytest | 需求指定技術棧 | 已安裝於 `.venv` |
-| psutil | 程序樹終止、記憶體上限、孤兒程序清理 | 已安裝，**請確認** |
-| pathspec | `.gitignore` 語法比對（自行實作易錯） | 已安裝，**請確認** |
-| httpx | Ollama/AI Provider HTTP 呼叫、API 測試 | 已安裝，**請確認** |
+| psutil | 程序樹終止、記憶體上限、孤兒程序清理 | 已核准（使用者於審查 session 回覆，2026-10-28） |
+| pathspec | `.gitignore` 語法比對（自行實作易錯） | 已核准（使用者於審查 session 回覆，2026-10-28） |
+| httpx | Ollama/AI Provider HTTP 呼叫、API 測試 | 已核准（使用者於審查 session 回覆，2026-10-28） |
 | ~~jinja2~~ | 依審查意見移除，HTML 報告改用 html.escape | 已移除 |
 | ruff, bandit, pip-audit, pytest-cov, pytest-timeout | 分析工具（dev） | 已安裝，**請確認** |
 | ~~chardet~~ | 依審查意見移除，改用 utf-8 → utf-8-sig → utf-16 BOM → cp950 → latin-1 | 已移除 |
@@ -33,7 +33,7 @@
 | 任務系統：DB 狀態、進度、日誌、取消、去重、終態寫入重試 | DONE | `test_jobs_procs.py`、`test_final_status_write_retries` |
 | 重啟恢復：running 與 **queued 都標 interrupted**（callable 已消失、測試屬副作用不自動重跑），各寫 AuditLog；孤兒程序樹在 pid+create_time 相符時才終止 | DONE | `test_recover_*` |
 | 安全子程序：無 shell、逾時、取消、程序樹終止、記憶體上限、低優先權；.cmd/.bat 參數含 cmd 特殊字元一律拒絕 | DONE | `test_run_command_*`、`test_bat_rejects_cmd_metacharacters` |
-| 資料備份／還原、保存期限 | TODO | |
+| 資料備份／還原、保存期限 | DONE | 見「系統功能」 |
 
 ## Phase 3：模組 A 多專案管理（後端）
 | 項目 | 狀態 | 測試 |
@@ -74,11 +74,42 @@
 | 每個 tool/rule 上限 2000 筆（truncated 標記）、minified/bundle 檔跳過、findings 每 500 筆分批寫入 | DONE | `test_per_rule_cap`、`test_minified_files_skipped` |
 | 分析中取消 → scan 與 job 皆 cancelled；分析期間 API 寫入不被阻塞 | DONE | `test_analysis_cancel_marks_scan_and_job` |
 
-## Phase 5–8
+## Phase 5：模組 C 測試管理（後端）
+| 項目 | 狀態 | 測試 |
+|---|---|---|
+| 偵測測試指令（只讀檔、不執行）並存為未批准 | DONE | `test_detect_suggests_unapproved_commands`、`test_scans_never_execute_tests` |
+| 批准綁定內容 sha256（argv、cwd、逾時、記憶體、環境變數設定）；任何修改即撤銷 | DONE | `test_unapproved_and_modified_commands_refused`、`test_env_change_revokes_approval_and_hides_token` |
+| 子程序環境變數 allowlist（GITHUB_TOKEN 等預設不傳） | DONE | `test_child_env_allowlist` |
+| Pytest 執行、即時日誌（遮罩機密）、結果/略過/時間、失敗分類、覆蓋率 | DONE | `test_run_results_failure_analysis_rerun_and_compare`、`test_test_output_redacted_in_log` |
+| 結果判定（無報告→error、exit 5→no_tests、exit≠0 但全過→error） | DONE | `test_run_status_rules`、`test_exit_nonzero_without_report_is_error` |
+| 重跑失敗（選擇器驗證，拒絕選項注入與專案外路徑） | DONE | `test_rerun_rejects_unsafe_selectors` |
+| 逾時／取消／程序樹終止／重複啟動 | DONE | `test_timeout_kills_tree`、`test_cancel_and_duplicate_run` |
+| Vitest／Playwright／.NET test | PARTIAL | 參數組裝與 TRX/JUnit 解析有單元測試；本機無範例專案，未實際執行 |
+
+## Phase 5：模組 D AI 修復（後端）
+| 項目 | 狀態 | 測試 |
+|---|---|---|
+| Provider Adapter（Ollama 本機、OpenAI 相容需明確授權）；未設定時其他模組正常 | DONE | `test_ai.py::test_not_configured_keeps_other_modules_working`、provider 測試 |
+| AI 回應格式／路徑驗證、大小上限 256KB、不跟隨轉址、拒絕遮罩字串 | DONE | `test_parse_rejects`、`test_redirect_not_followed`、`test_oversized_response_rejected` |
+| 隔離工作區（clone）產生 patch、diff、語法檢查、隔離測試、回歸風險 | DONE | `test_propose_apply_revert` |
+| 可編輯安裝指回原專案 → not_isolated，套用需額外確認 | DONE | `test_editable_install_marks_not_isolated` |
+| 人工批准套用（confirm + diff sha + 測試狀態確認）、防覆蓋、HEAD/dirty 檢查、回滾與 apply_failed 紀錄 | DONE | `test_apply_*`、`test_apply_rollback_*` |
+| 復原與修復歷史 | DONE | `test_revert_refused_if_changed_after_apply` |
+| 安全刪除（safe_rmtree 不跟隨 junction）、重啟清理孤兒工作區 | DONE | `test_recover_marks_runs_scans_repairs_and_cleans_orphans`、`test_safe_rmtree_refuses_outside_root` |
+| 實際接 Ollama 模型 | BLOCKED | 本機已安裝 ollama，但自動測試使用假 provider；未驗證特定模型輸出品質 |
+
+## 系統功能（後端）
+| 項目 | 狀態 | 測試 |
+|---|---|---|
+| 系統設定 API（驗證、稽核） | DONE | `test_settings_get_put_and_audit` |
+| 資料庫備份／還原（完整性檢查、還原前自動備份） | DONE | `test_backup_and_restore_roundtrip`、`test_restore_rejects_bad_input` |
+| 資料保存期限（只刪舊且已結束的紀錄、保留每專案最新掃描） | DONE | `test_retention_deletes_only_old_finished_records` |
+| 重啟恢復（Job、TestRun、Scan、RepairProposal） | DONE | `test_recover_*` |
+| Dashboard、稽核紀錄、工具狀態 API | DONE | `test_dashboard_and_tools`、`test_audit_log_filters` |
+
+## Phase 6–8
 | 模組 | 狀態 |
 |---|---|
-| C 測試管理平台 | TODO |
-| D AI 修復助手 | TODO |
 | E Web 介面 | TODO |
 | Windows 部署腳本與文件 | TODO |
 
@@ -91,4 +122,7 @@
 | 2026-10-28 | 同上 `-rs` | 115 passed，0 skipped（審查輪次 1–2 修正） |
 | 2026-10-28 | 同上 | 145 passed（Phase 4 模組 B） |
 | 2026-10-28 | 同上 `-rs` | 161 passed，0 skipped（審查輪次 2–3 修正） |
-| 2026-10-28 | `..\.venv\Scripts\ruff.exe check .` | All checks passed |
+| 2026-10-28 | 同上 `-rs` | 185 passed（Phase 5 模組 C） |
+| 2026-10-28 | 同上 `-rs` | 216 passed（Phase 5 模組 D） |
+| 2026-10-29 | 同上 `-rs` | 248 passed，0 skipped（審查累積修正＋系統 API） |
+| 2026-10-29 | `..\.venv\Scripts\ruff.exe check .` | All checks passed |

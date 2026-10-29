@@ -17,6 +17,7 @@ from app.db import WRITE_LOCK, dispose_engine, init_engine, read_session, write_
 from app.migrate import upgrade_db
 from app.models import AuditLog, Job, RepairProposal, Scan, TestRun
 from app.services import audit
+from app.services.ai import workspace
 from app.services.jobs import ACTIVE_STATUSES
 from app.services.settings_store import load_settings
 
@@ -93,6 +94,36 @@ def restore_db(settings: Settings, name: str) -> dict[str, Any]:
     return {"restored": name, "safety_backup": safety["name"]}
 
 
+def recover_records(settings: Settings) -> dict[str, int]:
+    """Called at startup after job recovery: nothing can be running yet, so any run/scan still
+    marked running was interrupted, and repair workspaces without a pending proposal are orphans."""
+    counts = {"test_runs": 0, "scans": 0, "repairs": 0, "workspaces": 0}
+    now = datetime.now(UTC)
+    with write_session() as s:
+        for run in s.query(TestRun).filter(TestRun.status == "running"):
+            run.status, run.finished_at = "interrupted", now
+            counts["test_runs"] += 1
+        for scan in s.query(Scan).filter(Scan.status == "running"):
+            scan.status, scan.finished_at = "interrupted", now
+            counts["scans"] += 1
+        for p in s.query(RepairProposal).filter(RepairProposal.status == "generating"):
+            p.status, p.error = "failed", "後端重新啟動，產生過程中斷"
+            counts["repairs"] += 1
+        keep = {p.workspace_path for p in s.query(RepairProposal).filter(RepairProposal.status == "validated")}
+        if any(counts.values()):
+            audit.record("system.recover", detail=dict(counts), session=s)
+    ws_root = settings.workspaces_dir
+    if ws_root.is_dir():
+        for d in ws_root.glob("repair-*"):
+            if str(d) not in keep:
+                try:
+                    workspace.safe_rmtree(d, ws_root)
+                    counts["workspaces"] += 1
+                except (OSError, workspace.WorkspaceError):
+                    continue
+    return counts
+
+
 def apply_retention(settings: Settings, now: datetime | None = None) -> dict[str, int]:
     """Delete finished records older than `retention_days`, with their log and report files.
     Projects, findings of the latest scan per project and applied repairs' backups are kept."""
@@ -117,7 +148,7 @@ def apply_retention(settings: Settings, now: datetime | None = None) -> dict[str
     for rid in old_runs:
         d = settings.reports_dir / "tests" / str(rid)
         if d.is_dir():
-            shutil.rmtree(d, ignore_errors=True)
+            workspace.safe_rmtree(d, settings.reports_dir)
             counts["files"] += 1
     for _, log_path in old_jobs:
         if log_path and Path(log_path).is_file() and settings.logs_dir in Path(log_path).parents:

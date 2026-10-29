@@ -136,7 +136,13 @@ def generate(proposal_id: int, ctx: JobContext, provider_factory: ProviderFactor
         syntax = patch.syntax_check(ws, changes)
         test_status, test_run_id = None, None
         key = meta.get("test_command_key")
-        if key and not syntax:
+        not_isolated = workspace.editable_installs(root) if key and not syntax else []
+        if not_isolated:
+            # Tests would import the original (unpatched) project code: not a validation.
+            test_status = "not_isolated"
+            meta["not_isolated_reason"] = not_isolated[:20]
+            ctx.log(f"依賴資料夾指回原專案，隔離測試不可信，略過：{not_isolated[:5]}")
+        elif key and not syntax:
             ctx.progress(0.6, "在隔離工作區執行測試")
             try:
                 result = run_tests(project_id, key, ctx, workspace=ws)
@@ -167,7 +173,7 @@ def generate(proposal_id: int, ctx: JobContext, provider_factory: ProviderFactor
         return {"proposal_id": proposal_id, "status": "failed", "error": str(exc)}
 
 
-def apply(proposal_id: int, diff_sha256: str) -> dict[str, Any]:
+def apply(proposal_id: int, diff_sha256: str, acknowledge_test_status: str | None = None) -> dict[str, Any]:
     with read_session() as s:
         p = s.get(RepairProposal, proposal_id)
         if p is None:
@@ -176,10 +182,13 @@ def apply(proposal_id: int, diff_sha256: str) -> dict[str, Any]:
         root, allow = Path(project.path), project.allow_project_tools
         files, base, ws = list(p.files or []), p.base_commit, p.workspace_path
         status, expected = p.status, (p.validation or {}).get("diff_sha256")
+        test_status = (p.validation or {}).get("test_status") or "not_run"
     if status != "validated":
         raise RepairError(f"目前狀態為 {status}，只有已驗證的建議可以套用")
     if not expected or diff_sha256 != expected:
         raise RepairError("確認的 diff 與建議內容不符，請重新檢視")
+    if test_status != "passed" and acknowledge_test_status != test_status:
+        raise RepairError(f"隔離測試未通過（{test_status}），請確認後再套用")
     if _clean_repo(root, allow) != base:
         raise RepairError("HEAD 已變更，請重新產生修復建議")
     for f in files:
@@ -201,18 +210,39 @@ def apply(proposal_id: int, diff_sha256: str) -> dict[str, Any]:
                 raise RepairError(f"工作區中的 {f['path']} 與驗證時不同")
             patch.atomic_write(dst, new)
             written.append(f["path"])
-    except (OSError, RepairError):
-        for rel in written:  # roll back what was already written
-            patch.atomic_write(resolve_inside(root, rel), (backup / rel).read_bytes())
-        raise
+    except (OSError, RepairError) as exc:
+        _roll_back(proposal_id, root, backup, written, exc)
+        raise RepairError(f"套用失敗，已還原已寫入的檔案：{exc}") from exc
     with write_session() as s:
         p = s.get(RepairProposal, proposal_id)
         p.status, p.applied_at, p.backup_path = "applied", utcnow(), str(backup)
         audit.record("repair.apply", target_type="repair", target_id=proposal_id, project_id=p.project_id,
-                     detail={"files": [f["path"] for f in files], "diff_sha256": diff_sha256}, session=s)
+                     detail={"files": [f["path"] for f in files], "diff_sha256": diff_sha256,
+                             "test_status": test_status, "acknowledged": acknowledge_test_status}, session=s)
     workspace.remove(Path(ws))
     _update(proposal_id, workspace_path=None)
     return {"proposal_id": proposal_id, "status": "applied", "files": [f["path"] for f in files]}
+
+
+def _roll_back(proposal_id: int, root: Path, backup: Path, written: list[str], cause: Exception) -> None:
+    """Restore every already-written file; if any restore fails, record exactly what is left."""
+    failed = []
+    for rel in written:
+        try:
+            patch.atomic_write(resolve_inside(root, rel), (backup / rel).read_bytes())
+        except (OSError, ValueError):
+            failed.append(rel)
+    with write_session() as s:
+        p = s.get(RepairProposal, proposal_id)
+        if failed:
+            p.status = "apply_failed"
+            p.error = f"以下檔案仍為新內容，備份位於 {backup}：{', '.join(failed)}"
+        audit.record("repair.apply_failed" if failed else "repair.apply_rolled_back", target_type="repair",
+                     target_id=proposal_id, project_id=p.project_id,
+                     detail={"written": written, "rollback_failed": failed, "backup_path": str(backup),
+                             "cause": str(cause)}, session=s)
+    if failed:
+        raise RepairError(p.error) from cause
 
 
 def revert(proposal_id: int) -> dict[str, Any]:

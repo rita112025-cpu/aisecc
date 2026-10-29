@@ -157,7 +157,11 @@ def run_bandit(ctx: ToolContext) -> ToolResult:
     if exe is None:
         return ToolResult("not_installed", message="找不到 bandit")
     excludes = ",".join(f"./{d}" for d in EXCLUDES) + ",./tests,./test"
-    argv = [exe, "-r", ".", "-f", "json", "-q", "-x", excludes]
+    # Our own ini stops bandit from loading the project's .bandit (which could skip rules).
+    ini = _scratch_dir().parent / "bandit.ini"
+    if not ini.is_file():
+        ini.write_text("[bandit]\n", encoding="utf-8")
+    argv = [exe, "-r", ".", "-f", "json", "-q", "-x", excludes, "--ini", str(ini)]
     res = _exec(ctx, argv)
     if fail := _outcome_failure(res):
         return fail
@@ -173,8 +177,16 @@ def run_bandit(ctx: ToolContext) -> ToolResult:
             r.get("line_number"), r.get("col_offset"), (r.get("line_range") or [None])[-1], "reported",
             {"tool_confidence": conf, "cwe": (r.get("issue_cwe") or {}).get("id"), "url": r.get("more_info")}))
     errors = data.get("errors") or []
-    msg = f"{len(errors)} 個檔案無法解析" if errors else ""
-    return ToolResult("ok", findings, msg, res.duration_sec, argv)
+    notes = [f"{len(errors)} 個檔案無法解析"] if errors else []
+    project_ini = ctx.root / ".bandit"
+    if project_ini.is_file():
+        try:
+            skips = re.search(r"(?im)^\s*skips\s*[:=]\s*(.+)$", read_text(project_ini, 10_000))
+        except (OSError, ValueError):
+            skips = None
+        if skips:
+            notes.append(f"專案 .bandit 要求略過：{skips.group(1).strip()[:200]}（未套用）")
+    return ToolResult("ok", findings, "；".join(notes), res.duration_sec, argv)
 
 
 # ---- node based (project code) -------------------------------------------------------------

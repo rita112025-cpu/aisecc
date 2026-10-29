@@ -28,6 +28,8 @@ class RepairIn(BaseModel):
 class ApplyIn(BaseModel):
     confirm: Literal[True]
     diff_sha256: str = Field(min_length=64, max_length=64)
+    # Required (and must equal the recorded value) when isolated tests did not pass.
+    acknowledge_test_status: str | None = Field(default=None, max_length=20)
 
 
 class RepairOut(ORMModel):
@@ -116,7 +118,7 @@ def _act(fn, *args) -> dict[str, Any]:  # noqa: ANN001 - small dispatcher
 
 @router.post("/repairs/{proposal_id}/apply")
 def apply_repair(proposal_id: int, body: ApplyIn) -> dict[str, Any]:
-    return _act(repair.apply, proposal_id, body.diff_sha256)
+    return _act(repair.apply, proposal_id, body.diff_sha256, body.acknowledge_test_status)
 
 
 @router.post("/repairs/{proposal_id}/revert")

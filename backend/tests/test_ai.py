@@ -158,8 +158,8 @@ def test_propose_apply_revert(ai_client, settings) -> None:  # noqa: ANN001
 
     sha = p["validation"]["diff_sha256"]
     assert c.post(f"/api/repairs/{p['id']}/apply", json={"diff_sha256": sha}).status_code == 422
-    assert c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "diff_sha256": "0" * 64}).status_code == 409
-    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "diff_sha256": sha})
+    assert c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "acknowledge_test_status": "not_run", "diff_sha256": "0" * 64}).status_code == 409
+    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "acknowledge_test_status": "not_run", "diff_sha256": sha})
     assert r.status_code == 200, r.text
     assert b"if b else 0" in (repo / "src" / "calc.py").read_bytes()
     assert git(repo, "rev-parse", "HEAD").strip() == head  # never commits
@@ -174,7 +174,7 @@ def test_apply_refused_if_user_modified_file(ai_client) -> None:  # noqa: ANN001
     c, pid, repo = ai_client
     p = _propose(c, pid, FakeProvider(json.dumps(FIX)))
     (repo / "src" / "calc.py").write_text("# 使用者的修改\n", encoding="utf-8")
-    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "diff_sha256": p["validation"]["diff_sha256"]})
+    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "acknowledge_test_status": "not_run", "diff_sha256": p["validation"]["diff_sha256"]})
     assert r.status_code == 409
     assert (repo / "src" / "calc.py").read_text(encoding="utf-8") == "# 使用者的修改\n"
 
@@ -182,7 +182,7 @@ def test_apply_refused_if_user_modified_file(ai_client) -> None:  # noqa: ANN001
 def test_revert_refused_if_changed_after_apply(ai_client) -> None:  # noqa: ANN001
     c, pid, repo = ai_client
     p = _propose(c, pid, FakeProvider(json.dumps(FIX)))
-    c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "diff_sha256": p["validation"]["diff_sha256"]})
+    c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "acknowledge_test_status": "not_run", "diff_sha256": p["validation"]["diff_sha256"]})
     (repo / "src" / "calc.py").write_text("# later edit\n", encoding="utf-8")
     assert c.post(f"/api/repairs/{p['id']}/revert").status_code == 409
     assert (repo / "src" / "calc.py").read_text(encoding="utf-8") == "# later edit\n"
@@ -194,7 +194,7 @@ def test_apply_refused_after_new_commit(ai_client) -> None:  # noqa: ANN001
     (repo / "README.md").write_text("x\n", encoding="utf-8")
     git(repo, "add", "README.md")
     git(repo, "commit", "-q", "-m", "more")
-    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "diff_sha256": p["validation"]["diff_sha256"]})
+    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "acknowledge_test_status": "not_run", "diff_sha256": p["validation"]["diff_sha256"]})
     assert r.status_code == 409 and "HEAD" in r.json()["detail"]
 
 

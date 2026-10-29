@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 MAX_EDITS = 10
 MAX_TEXT = 20_000
+MASK_PATTERN = re.compile(r"…\S{0,4}（長度 \d+）|['\"]\*{4,8}['\"]")
 
 
 class Edit(BaseModel):
@@ -27,6 +28,15 @@ class Edit(BaseModel):
             v = v[2:]
         if not v or ":" in v or v.startswith("/") or ".." in v.split("/") or v.split("/")[0] == ".git":
             raise ValueError(f"不合法的檔案路徑：{v}")
+        return v
+
+    @field_validator("replace")
+    @classmethod
+    def _not_masked(cls, v: str) -> str:
+        # The prompt shows secrets masked as "abcd…xy（長度 N）"; copying that into code would
+        # replace a real value with the mask.
+        if MASK_PATTERN.search(v):
+            raise ValueError("replace 含有遮罩後的機密字串，拒絕")
         return v
 
 

@@ -4,6 +4,7 @@ rest of the system keeps working."""
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Protocol
 
@@ -11,9 +12,25 @@ import httpx
 
 from app.services.settings_store import AppSettings, is_local_url
 
+MAX_RESPONSE_BYTES = 256 * 1024
+
 
 class AIError(RuntimeError):
     pass
+
+
+def _post_capped(client: httpx.Client, url: str, **kwargs: Any) -> tuple[int, bytes]:
+    """POST and read at most MAX_RESPONSE_BYTES; larger responses are rejected, never stored."""
+    with client.stream("POST", url, **kwargs) as r:
+        if 300 <= r.status_code < 400:
+            raise AIError(f"AI 服務回傳轉址 {r.status_code}，已拒絕跟隨")
+        chunks, size = [], 0
+        for chunk in r.iter_bytes():
+            size += len(chunk)
+            if size > MAX_RESPONSE_BYTES:
+                raise AIError(f"AI 回應過大（超過 {MAX_RESPONSE_BYTES // 1024} KB）")
+            chunks.append(chunk)
+        return r.status_code, b"".join(chunks)
 
 
 class AINotConfigured(AIError):
@@ -45,22 +62,22 @@ class OllamaProvider:
 
     def _client(self) -> httpx.Client:
         return httpx.Client(base_url=self.base_url, timeout=self.timeout, transport=self._transport,
-                            trust_env=False)
+                            trust_env=False, follow_redirects=False)
 
     def generate(self, prompt: str) -> str:
         body = {"model": self.model, "prompt": prompt, "stream": False, "format": "json",
                 "options": {"temperature": 0.1}}
         try:
             with self._client() as c:
-                r = c.post("/api/generate", json=body)
+                code, raw = _post_capped(c, "/api/generate", json=body)
         except httpx.TimeoutException as exc:
             raise AIError(f"Ollama 回應逾時（{self.timeout:.0f}s）") from exc
         except httpx.HTTPError as exc:
             raise AIError(f"無法連線到 Ollama：{exc}") from exc
-        if r.status_code != 200:
-            raise AIError(f"Ollama 錯誤 {r.status_code}：{r.text[:300]}")
+        if code != 200:
+            raise AIError(f"Ollama 錯誤 {code}：{raw[:300].decode('utf-8', 'replace')}")
         try:
-            return str(r.json()["response"])
+            return str(json.loads(raw)["response"])
         except (ValueError, KeyError) as exc:
             raise AIError("Ollama 回應格式不正確") from exc
 
@@ -93,16 +110,17 @@ class OpenAICompatibleProvider:
                 "messages": [{"role": "system", "content": "You return only JSON."},
                              {"role": "user", "content": prompt}]}
         try:
-            with httpx.Client(timeout=self.timeout, transport=self._transport, trust_env=False) as c:
-                r = c.post(f"{self.base_url}/chat/completions", json=body, headers=headers)
+            with httpx.Client(timeout=self.timeout, transport=self._transport, trust_env=False,
+                              follow_redirects=False) as c:
+                code, raw = _post_capped(c, f"{self.base_url}/chat/completions", json=body, headers=headers)
         except httpx.TimeoutException as exc:
             raise AIError("AI 服務回應逾時") from exc
         except httpx.HTTPError as exc:
             raise AIError(f"無法連線到 AI 服務：{exc}") from exc
-        if r.status_code != 200:
-            raise AIError(f"AI 服務錯誤 {r.status_code}")
+        if code != 200:
+            raise AIError(f"AI 服務錯誤 {code}")
         try:
-            return str(r.json()["choices"][0]["message"]["content"])
+            return str(json.loads(raw)["choices"][0]["message"]["content"])
         except (ValueError, KeyError, IndexError) as exc:
             raise AIError("AI 服務回應格式不正確") from exc
 

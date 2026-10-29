@@ -33,11 +33,12 @@ def test_migration_creates_required_tables(db: Path) -> None:
 
 
 def test_migration_is_idempotent(db: Path) -> None:
-    from app.migrate import upgrade_db
+    from alembic.script import ScriptDirectory
+    from app.migrate import alembic_config, upgrade_db
 
     upgrade_db(db)  # second run must be a no-op, not fail
     with sqlite3.connect(db) as conn:
-        assert conn.execute("select version_num from alembic_version").fetchone()[0] == "0002"
+        assert conn.execute("select version_num from alembic_version").fetchone()[0] == ScriptDirectory.from_config(alembic_config(db)).get_current_head()
 
 
 def test_wal_mode_enabled(db: Path) -> None:

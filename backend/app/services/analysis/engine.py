@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from collections import Counter
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from app.services.fswalk import resolve_inside, walk
 from app.services.jobs import JobCancelled, JobContext
 from app.services.settings_store import load_settings
 
+OPTIONAL_TOOLS = frozenset({"semgrep"})
 MAX_PER_RULE = 2000
 BATCH_SIZE = 500
 
@@ -132,7 +132,7 @@ def _inside_project(root: Path, findings: list[RawFinding]) -> tuple[list[RawFin
 def _redact_all(findings: list[RawFinding], values: set[str]) -> list[RawFinding]:
     for f in findings:
         f.message = secrets.redact(f.message, values)
-        f.extra = json.loads(secrets.redact(json.dumps(f.extra, ensure_ascii=False), values))
+        f.extra = secrets.redact_obj(f.extra, values)
     return findings
 
 
@@ -228,7 +228,10 @@ def run_analysis_scan(project_id: int, ctx: JobContext, tools: list[str] | None 
         raise
     ctx.progress(0.96, "寫入結果")
     summary = persist_findings(scan_id, project_id, findings)
-    incomplete = [n for n, st in tool_status.items() if st["state"] not in ("ok", "not_applicable")]
+    # Optional tools that are simply not installed are shown but do not make the scan partial;
+    # otherwise nearly every scan would be partial and the status would lose its meaning.
+    incomplete = [n for n, st in tool_status.items() if st["state"] not in ("ok", "not_applicable")
+                  and not (n in OPTIONAL_TOOLS and st["state"] == "not_installed")]
     with write_session() as s:
         scan = s.get(Scan, scan_id)
         scan.status = "partial" if (incomplete or meta["truncated"]) else "completed"
