@@ -97,12 +97,20 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
                                           coverage and cmd.framework == "pytest" and _has_pytest_cov(root))
     argv = [*cmd.argv, *extra_args, *selection]
     ctx.log(f"$ {' '.join(argv)}\n(工作目錄：{workdir})")
-    ctx.progress(0.05, "執行測試中")
-    res = run_command(argv, RunOptions(
-        cwd=workdir, timeout_sec=cmd.timeout_sec, max_memory_mb=cmd.max_memory_mb, log_path=ctx.log_path,
-        cancel_event=ctx.cancel_event, on_start=ctx.register_process, redact=_redact,
-        env=child_env(list(cmd.extra_env_names or []), bool(cmd.inherit_full_env), extra_env),
-    ))
+    try:
+        ctx.progress(0.05, "執行測試中")  # raises JobCancelled if a cancel is already pending
+        res = run_command(argv, RunOptions(
+            cwd=workdir, timeout_sec=cmd.timeout_sec, max_memory_mb=cmd.max_memory_mb, log_path=ctx.log_path,
+            cancel_event=ctx.cancel_event, on_start=ctx.register_process, redact=_redact,
+            env=child_env(list(cmd.extra_env_names or []), bool(cmd.inherit_full_env), extra_env),
+        ))
+    except BaseException as exc:
+        # The TestRun row already exists: never leave it "running" when the job ends early.
+        with write_session() as s:
+            run = s.get(TestRun, run_id)
+            run.status = "cancelled" if isinstance(exc, JobCancelled) else "error"
+            run.finished_at = utcnow()
+        raise
     ctx.log(f"\n[結束] outcome={res.outcome} exit={res.exit_code} 耗時={res.duration_sec:.1f}s")
 
     parsed, parse_note = _collect_results(cmd.framework, out_dir)

@@ -25,6 +25,36 @@ def test_read_log_never_splits_utf8(tmp_path: Path, limit: int) -> None:
     assert out == TEXT
 
 
+def test_cancel_before_spawn_finalises_test_run(db: Path, settings, tmp_path: Path) -> None:  # noqa: ANN001
+    """A cancel arriving between TestRun creation and process start must not leave it 'running'."""
+    import sys
+    import threading
+
+    from app.db import read_session, write_session
+    from app.models import Job, Project, TestCommand, TestRun
+    from app.services.jobs import JobCancelled, JobContext
+    from app.services.testing.commands import command_hash
+    from app.services.testing.runner import run_tests
+
+    with write_session() as s:
+        p = Project(name="p", path=str(tmp_path), path_key=str(tmp_path).lower())
+        s.add(p)
+        s.flush()
+        cmd = TestCommand(project_id=p.id, key="t", framework="pytest", argv=[sys.executable, "-c", "pass"], cwd=".",
+                          timeout_sec=60, max_memory_mb=2048, extra_env_names=[], inherit_full_env=False)
+        cmd.approved, cmd.approved_hash = True, command_hash(cmd)
+        s.add(cmd)
+        s.add(Job(id="job-x", type="test_run", status="running"))
+        pid = p.id
+    event = threading.Event()
+    event.set()  # cancel already requested
+    ctx = JobContext("job-x", event, settings.logs_dir / "x.log")
+    with pytest.raises(JobCancelled):
+        run_tests(pid, "t", ctx)
+    with read_session() as s:
+        assert s.query(TestRun).one().status == "cancelled"
+
+
 @pytest.mark.parametrize("path", ["/api/health", "/", "/api/projects"])
 def test_security_headers(client: TestClient, path: str) -> None:  # noqa: F811
     r = client.get(path)

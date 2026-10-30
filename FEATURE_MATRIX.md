@@ -24,7 +24,7 @@
 | react | 18.3.1 | 執行期 | UI |
 | react-dom | 18.3.1 | 執行期 | UI |
 | react-router-dom | 6.28.0 | 執行期 | 9 個頁面路由 |
-| vite | 5.4.11 | 開發 | 開發伺服器與建置 |
+| vite | 5.4.21（原 5.4.11，使用者核准安全升級） | 開發 | 開發伺服器與建置 |
 | @vitejs/plugin-react | 4.3.4 | 開發 | Vite React 支援 |
 | typescript | 5.6.3 | 開發 | 型別檢查 |
 | @types/react | 18.3.12 | 開發 | 型別 |
@@ -143,7 +143,7 @@
 | 安全標頭（CSP、frame-ancestors、X-Frame-Options、nosniff；報告 sandbox）防 clickjacking | DONE | `test_security_headers`、`test_report_html_is_sandboxed`、E2E console 無錯誤 |
 | AI 套用時前端自行計算所顯示 diff 的 SHA-256 | DONE | Vitest `RepairsPage`（API 給的 hash 故意不一致） |
 | 輪詢：背景分頁暫停、4xx 停止、5xx 指數退避；即時日誌不切斷 UTF-8 | DONE | Vitest `JobPanel`、`test_read_log_never_splits_utf8` |
-| Vite dev server 已知漏洞（5.4.11） | PARTIAL | 已設 `strictPort`、只綁 127.0.0.1；升級到 ≥ 5.4.19 需使用者同意 |
+| Vite dev server 已知漏洞 | DONE | 使用者核准（2026-10-30）後升級至 5.4.21（`npm ls vite` 全部 dedupe）；另設 `strictPort`、只綁 127.0.0.1 |
 | 桌面解析度 | DONE | 固定側欄 + 流式主內容（未做行動版） |
 | E2E 規格檔型別檢查 | PARTIAL | 由 Playwright 轉譯執行並通過；`tsc` 需 `@types/node`（未核准），故 tsconfig 只涵蓋 `src` |
 
@@ -181,5 +181,7 @@
 | 2026-10-29 | `cd frontend; npx vitest run` | 19 passed |
 | 2026-10-29 | `cd frontend; npx tsc --noEmit -p .` | 0 errors |
 | 2026-10-29 | `cd frontend; npx vite build; npx playwright test` | 4 passed（真實後端、暫存資料目錄、port 8799） |
-| 2026-10-29 | `.un_tests.ps1` | pytest 254／ruff／tsc／vitest 19／build／playwright 4 全 PASS |
+| 2026-10-29 | `.
+un_tests.ps1` | pytest 254／ruff／tsc／vitest 19／build／playwright 4 全 PASS |
 | 2026-10-29 | 審查輪次 6 修正後 | pytest 270、vitest 21、playwright 4（CSP 下 9 頁 console 無錯誤） |
+| 2026-10-30 | `.un_tests.ps1`（vite 5.4.21） | pytest 271、vitest 21、playwright 4 全 PASS；`playwright test --repeat-each 3` 12 passed |

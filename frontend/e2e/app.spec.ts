@@ -8,8 +8,10 @@ import { fileURLToPath } from "node:url";
 const python = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", ".venv", "Scripts", "python.exe");
 
 /** A small git project at a path with Chinese characters and spaces. */
-function makeProject(): string {
-  const root = path.join(mkdtempSync(path.join(tmpdir(), "aisecc-proj-")), "端對端 專案");
+function makeProject(): { root: string; name: string } {
+  // Unique name: repeated runs share one backend, so names must not collide.
+  const name = `端對端 專案 ${Math.random().toString(36).slice(2, 8)}`;
+  const root = path.join(mkdtempSync(path.join(tmpdir(), "aisecc-proj-")), name);
   mkdirSync(path.join(root, "tests"), { recursive: true });
   writeFileSync(path.join(root, "app.py"), 'import subprocess\n\nAPI_TOKEN = "Zq8vR2kLm9Xw4TnB7pQs"\n\n\ndef run(c):\n    return subprocess.call(c, shell=True)\n');
   writeFileSync(path.join(root, "tests", "test_ok.py"), "def test_ok():\n    assert 1 + 1 == 2\n\n\ndef test_bad():\n    assert 1 == 2\n");
@@ -19,7 +21,7 @@ function makeProject(): string {
   git("init", "-q", "-b", "main");
   git("-c", "user.email=e2e@example.invalid", "-c", "user.name=e2e", "add", "-A");
   git("-c", "user.email=e2e@example.invalid", "-c", "user.name=e2e", "commit", "-q", "-m", "init");
-  return root;
+  return { root, name };
 }
 
 async function noErrors(page: Page) {
@@ -52,11 +54,11 @@ test("all nine pages render from the real API without errors", async ({ page }) 
 });
 
 test("project → inventory → analysis → triage", async ({ page }) => {
-  const root = makeProject();
+  const { root, name } = makeProject();
   await page.goto("/projects");
   await page.getByLabel("專案路徑").fill(root);
   await page.getByRole("button", { name: "新增專案" }).click();
-  await page.getByRole("link", { name: "端對端 專案" }).click();
+  await page.getByRole("link", { name }).click();
 
   await page.getByRole("button", { name: "執行專案盤點" }).click();
   await expect(page.getByText(/健康度報告：/)).toBeVisible({ timeout: 60_000 });
@@ -81,11 +83,11 @@ test("project → inventory → analysis → triage", async ({ page }) => {
 });
 
 test("test center: approval, run, refresh re-attaches to a running job, cancel", async ({ page }) => {
-  const root = makeProject();
+  const { root, name } = makeProject();
   await page.goto("/projects");
   await page.getByLabel("專案路徑").fill(root);
   await page.getByRole("button", { name: "新增專案" }).click();
-  await page.getByRole("link", { name: "端對端 專案" }).click();
+  await page.getByRole("link", { name }).click();
   const id = page.url().split("/").pop();
   await page.goto(`/tests?project=${id}`);
 
