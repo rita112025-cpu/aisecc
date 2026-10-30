@@ -7,6 +7,7 @@ junctions for test validation and are always unlinked before the workspace is de
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from app.config import get_settings
 from app.services import gitinfo
 
 LINKED_DIRS = (".venv", "venv", "node_modules")
+CMD_UNSAFE = re.compile(r'[&|<>^%!"\r\n]')
 
 
 class WorkspaceError(RuntimeError):
@@ -46,6 +48,11 @@ def link_dependencies(project_root: Path, workspace: Path, cwd: str = ".") -> li
             dst = (workspace / base / name)
             if src.is_dir() and not dst.exists() and dst.parent.is_dir():
                 if sys.platform == "win32":
+                    # mklink runs through cmd.exe, which re-parses the line: refuse rather than execute
+                    # any command embedded in a directory name (e.g. "x&del ...").
+                    if CMD_UNSAFE.search(str(src)) or CMD_UNSAFE.search(str(dst)):
+                        raise WorkspaceError(
+                            "專案路徑含有 cmd 特殊字元（& | < > ^ % ! 等），無法建立依賴連結，已拒絕")
                     proc = subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(dst), str(src)],  # noqa: S603,S607
                                           capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     if proc.returncode != 0:

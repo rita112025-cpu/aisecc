@@ -45,6 +45,28 @@ def test_cancel_running_repair_leaves_proposal_to_generate(client: TestClient) -
         assert s.get(RepairProposal, pid).status == "generating"
 
 
+def test_dependency_link_refuses_cmd_metacharacters(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """mklink runs through cmd.exe: a path with & and no spaces would execute a second command.
+    The link must be refused (no subprocess at all), not created."""
+    import subprocess
+
+    from app.services.ai import workspace
+
+    evil_root = tmp_path / "x&ver&rem"
+    (evil_root / ".venv").mkdir(parents=True)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    spawned: list = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: spawned.append(a) or None)
+    try:
+        workspace.link_dependencies(evil_root, ws, ".")
+        raised = False
+    except workspace.WorkspaceError:
+        raised = True
+    assert raised and spawned == []
+    assert not (ws / ".venv").exists()
+
+
 def test_cancel_queued_non_repair_job_unaffected(client: TestClient) -> None:  # noqa: F811
     with write_session() as s:
         s.add(Job(id="job-scan", type="inventory_scan", status="queued", params={}))
