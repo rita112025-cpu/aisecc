@@ -79,6 +79,17 @@ def create_proposal(project_id: int, *, finding_id: int | None, target_file: str
         return p.id
 
 
+def finalise_unstarted(proposal_id: int) -> None:
+    """A repair job cancelled while still queued never runs generate(), so nothing would ever leave
+    'generating' (and the user could not reject it). Only called for jobs that never started."""
+    with write_session() as s:
+        p = s.get(RepairProposal, proposal_id)
+        if p is not None and p.status == "generating":
+            p.status, p.error = "failed", "使用者在開始前取消"
+            audit.record("repair.cancelled_unstarted", target_type="repair", target_id=proposal_id,
+                         project_id=p.project_id, session=s)
+
+
 def _update(pid: int, **fields: Any) -> None:
     with write_session() as s:
         p = s.get(RepairProposal, pid)

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.common import JobOut, get_job_or_404, job_manager
 from app.db import get_db
 from app.models import Job
+from app.services.ai.repair import finalise_unstarted
 from app.services.jobs import JobManager, read_log
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -45,8 +46,13 @@ def get_job_log(job_id: str, offset: int = Query(0, ge=0), db: Session = Depends
 
 @router.post("/{job_id}/cancel", response_model=JobOut)
 def cancel_job(job_id: str, db: Session = Depends(get_db), jobs: JobManager = Depends(job_manager)) -> Job:
-    get_job_or_404(db, job_id)
+    was_queued = get_job_or_404(db, job_id).status == "queued"
     if not jobs.cancel(job_id):
         raise HTTPException(409, "任務已結束，無法取消")
     db.rollback()  # end the read snapshot so the committed write is visible
-    return get_job_or_404(db, job_id)
+    job = get_job_or_404(db, job_id)
+    # A repair cancelled before it started never reaches generate(), which is what normally finalises
+    # its proposal; finalise it here. Jobs that already started are finalised by generate() itself.
+    if was_queued and job.type == "ai_repair" and job.started_at is None and job.params.get("proposal_id"):
+        finalise_unstarted(int(job.params["proposal_id"]))
+    return job
