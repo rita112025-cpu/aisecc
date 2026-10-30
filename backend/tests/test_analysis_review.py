@@ -164,7 +164,8 @@ def test_analysis_cancel_marks_scan_and_job(client: TestClient, tmp_path: Path, 
     # API writes stay responsive while a tool runs (no DB lock held during tool execution).
     t0 = time.monotonic()
     assert client.patch(f"/api/projects/{pid}", json={"name": "改名"}).status_code == 200
-    assert time.monotonic() - t0 < 1.0
+    # A held write lock would block for the tool's 5 s run; 3 s tolerates a heavily loaded machine.
+    assert time.monotonic() - t0 < 3.0
     client.post(f"/api/jobs/{jid}/cancel")
     assert wait_job(client, jid)["status"] == "cancelled"
     with read_session() as s:

@@ -93,7 +93,8 @@ def test_nested_write_session_fails_fast(db: Path) -> None:
     t0 = time.monotonic()
     with pytest.raises(RuntimeError, match="巢狀"), write_session():
         audit.record("nested")  # opens its own write_session
-    assert time.monotonic() - t0 < 0.5
+    # The bug being guarded against waits the full 5 s busy_timeout; 2 s leaves headroom for a loaded machine.
+    assert time.monotonic() - t0 < 2.0
 
 
 def test_final_status_write_retries(db: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

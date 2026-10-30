@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import xml.etree.ElementTree as ET  # noqa: S405
 from pathlib import Path
@@ -20,6 +21,7 @@ from app.services.testing import failures, reports
 from app.services.testing.commands import child_env, command_hash, reporter_args, rerun_args
 
 RESULT_BATCH = 500
+log = logging.getLogger(__name__)
 
 
 class CommandNotApproved(PermissionError):
@@ -105,11 +107,15 @@ def run_tests(project_id: int, key: str, ctx: JobContext, *, coverage: bool = Fa
             env=child_env(list(cmd.extra_env_names or []), bool(cmd.inherit_full_env), extra_env),
         ))
     except BaseException as exc:
-        # The TestRun row already exists: never leave it "running" when the job ends early.
-        with write_session() as s:
-            run = s.get(TestRun, run_id)
-            run.status = "cancelled" if isinstance(exc, JobCancelled) else "error"
-            run.finished_at = utcnow()
+        # The TestRun row already exists: never leave it "running" when the job ends early. If this
+        # write fails too (e.g. the DB is busy), keep the original error; startup recovery fixes the row.
+        try:
+            with write_session() as s:
+                run = s.get(TestRun, run_id)
+                run.status = "cancelled" if isinstance(exc, JobCancelled) else "error"
+                run.finished_at = utcnow()
+        except Exception:  # noqa: BLE001 - must not mask the original exception
+            log.exception("could not finalise test run %s", run_id)
         raise
     ctx.log(f"\n[結束] outcome={res.outcome} exit={res.exit_code} 耗時={res.duration_sec:.1f}s")
 
