@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.db import read_session, write_session
 from app.models import Job, Project, RepairProposal
+from tests.test_ai import ai_client  # noqa: F401 - fixture
 from tests.test_api_projects import client  # noqa: F401 - fixture
 
 
@@ -73,3 +74,33 @@ def test_cancel_queued_non_repair_job_unaffected(client: TestClient) -> None:  #
     assert client.post("/api/jobs/job-scan/cancel").status_code == 200
     with read_session() as s:
         assert s.get(Job, "job-scan").status == "cancelled"
+
+
+SECRET = "sk-live-0123456789abcdefABCDEF"
+
+
+def test_repair_diff_is_masked_but_apply_writes_real_bytes(ai_client) -> None:  # noqa: ANN001, F811
+    """Design (user-approved): the stored/displayed diff and its confirmation hash use the masked text,
+    while apply writes the real verified bytes. The plaintext secret must not reach the proposal."""
+    import hashlib
+    import json
+
+    from tests.test_ai import FIX, FakeProvider, _propose, git
+
+    c, pid, repo = ai_client
+    # secret on the line right above the edited line, so it falls inside the diff context
+    (repo / "src" / "calc.py").write_text(
+        f'def add(a, b):\n    return a + b\n\n\ndef div(a, b):\n    token = "{SECRET}"\n    return a / b\n',
+        encoding="utf-8")
+    git(repo, "-c", "user.email=e2e@example.invalid", "-c", "user.name=e2e", "commit", "-qam", "secret fixture")
+    p = _propose(c, pid, FakeProvider(json.dumps(FIX)))
+    assert p["status"] == "validated", p
+    assert SECRET not in p["diff"], "plaintext secret persisted in proposal diff"
+    assert SECRET not in json.dumps(p, ensure_ascii=False)
+    shown_hash = hashlib.sha256(p["diff"].encode("utf-8")).hexdigest()
+    assert p["validation"]["diff_sha256"] == shown_hash  # the hash the user confirms is of the masked view
+    r = c.post(f"/api/repairs/{p['id']}/apply", json={"confirm": True, "acknowledge_test_status": "not_run",
+                                                     "diff_sha256": shown_hash})
+    assert r.status_code == 200, r.text
+    applied = (repo / "src" / "calc.py").read_text(encoding="utf-8")
+    assert SECRET in applied and "if b else 0" in applied  # real bytes written, not the masked view

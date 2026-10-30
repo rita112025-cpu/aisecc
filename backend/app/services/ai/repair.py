@@ -15,6 +15,7 @@ from app.services.ai import patch, risk, workspace
 from app.services.ai.prompt import build_prompt
 from app.services.ai.providers import AIError, AIProvider, build_provider
 from app.services.ai.schema import InvalidAIResponse, parse_response
+from app.services.analysis.secrets import redact
 from app.services.fswalk import read_text, resolve_inside
 from app.services.jobs import JobCancelled, JobContext, JobTimeout
 from app.services.settings_store import load_settings
@@ -143,7 +144,9 @@ def generate(proposal_id: int, ctx: JobContext, provider_factory: ProviderFactor
             _update(proposal_id, workspace_path=None)
             return {"proposal_id": proposal_id, "status": "invalid", "error": error}
 
-        diff = patch.unified_diff(changes)
+        # The diff is stored, displayed and hash-confirmed in masked form (secrets never persisted).
+        # apply() still writes the real verified bytes from the workspace.
+        diff = redact(patch.unified_diff(changes), set())
         syntax = patch.syntax_check(ws, changes)
         test_status, test_run_id = None, None
         key = meta.get("test_command_key")
