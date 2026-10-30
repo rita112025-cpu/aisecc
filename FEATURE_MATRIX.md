@@ -184,4 +184,4 @@
 | 2026-10-29 | `.
 un_tests.ps1` | pytest 254／ruff／tsc／vitest 19／build／playwright 4 全 PASS |
 | 2026-10-29 | 審查輪次 6 修正後 | pytest 270、vitest 21、playwright 4（CSP 下 9 頁 console 無錯誤） |
-| 2026-10-30 | `.un_tests.ps1`（vite 5.4.21） | pytest 271、vitest 21、playwright 4 全 PASS；`playwright test --repeat-each 3` 12 passed |
+| 2026-10-30 | `.\run_tests.ps1`（vite 5.4.21） | pytest 271、vitest 21、playwright 4 全 PASS；`playwright test --repeat-each 3` 12 passed |
